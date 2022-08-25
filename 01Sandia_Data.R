@@ -18,38 +18,38 @@ require(lubridate)
 #   dplyr::select(GEOID, NAME, POPULATION) 
 # county_map_proj = county_map %>% 
 #   st_transform(mycrs) # project to Conic Equal Area Albers, EPSG:5070
-# save(county_map_proj, file = "county_map_proj.Rda")
+# save(county_map_proj, file = "Data/processed/county_map_proj.Rda")
 
 ################################################################################
 # LOAD DATA ####################################################################
 ################################################################################
 # Population density (GEOID, POPULATION, DENSITY, and geometry)
-load(file = "county_map_proj.Rda")
+load(file = "Data/processed/county_map_proj.Rda")
 county_map_area = county_map_proj %>%  
   mutate(AREA = as.vector(st_area(county_map_proj))) %>% #sq-meters; as.vector removes units suffix 
   mutate(DENSITY = POPULATION / AREA * 1000^2) %>% #population per sq-km 
   dplyr::select(-c(AREA, NAME)) 
 
 # NLCD (static)
-load(file = "county_proj_nlcd.Rda")
+load(file = "Data/processed/county_proj_nlcd.Rda")
 county_map_nlcd = county_map_nlcd %>%
   dplyr::select(-c(NAME, POPULATION, ID, Other, Total)) %>%
   st_set_geometry(NULL)
 
 # DEM (static)
-load(file = "county_proj_dem.Rda")
+load(file = "Data/processed/county_proj_dem.Rda")
 county_map_dem = county_proj_dem %>%
   select(GEOID, DEM_mean, DEM_med, DEM_sd, DEM_min, DEM_max) %>%
   st_set_geometry(NULL)
 
 # Root Zone (static)
-load(file = "county_proj_rz.Rda")
+load(file = "Data/processed/county_proj_rz.Rda")
 county_map_rz = county_map_rz %>%
   select(GEOID, RZ_mean, RZ_med, RZ_mode) %>%
   st_set_geometry(NULL)
 
 # SPI (monthly)
-load(file = "county_proj_spi.Rda")
+load(file = "Data/processed/county_proj_spi.Rda")
 county_map_spi = county_proj_spi %>%
   mutate(date_ym = str_extract(Date, "^.{7}")) %>% # returns yyyy-mm
   dplyr::select(-NAME, -Date, -POPULATION) %>%
@@ -57,13 +57,13 @@ county_map_spi = county_proj_spi %>%
 
 ## Socio-Economic Data
 # ## County-level indicators
-load(file = "county_proj_social.Rda") 
+load(file = "Data/processed/county_proj_social.Rda") 
 county_map_social = county_proj_social %>%
   dplyr::select(-NAME, -POPULATION) %>%
   st_set_geometry(NULL)
 
 ## Outages
-load(file = "county_proj_outages.Rda")
+load(file = "Data/processed/county_proj_outages.Rda")
 county_map_outages = county_proj_outages %>%
   dplyr::select(-NAME, -POPULATION) %>%
   st_set_geometry(NULL)
@@ -119,7 +119,7 @@ county_map_ALL = county_map_JOIN %>%
                    min_T2M, mean_T2M, max_T2M, delta_T2M, delta_WIND2M, delta_WIND50M)) %>%
   dplyr::select(-c(min_T10M_C, max_T10M_C, mean_T10M_C, min_T2M_C, max_T2M_C, mean_T2M_C, delta_T2M_C, delta_T10M_C)) %>% #already have these in Kelvin 
   dplyr::select(-c(WETLAND)) #already have Wetlands 
-#save(county_map_ALL, file = "county_map_ALL.Rda")
+#save(county_map_ALL, file = "Data/processed/county_map_ALL.Rda")
 
 ## Checks to make sure MERRA definitions add up to our event indicator flags
 # asd = county_map_JOIN %>%
@@ -150,4 +150,4 @@ clean_prep = prep(clean_recipe) #see changes
 sf_data_CLEAN = sf_data %>% 
   dplyr::select(c(GEOID, POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out)) %>%
   bind_cols(sf_pred_CLEAN)
-#save(sf_data_CLEAN, file = "sf_data_CLEAN.Rda")
+#save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")

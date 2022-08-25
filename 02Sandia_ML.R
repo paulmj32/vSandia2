@@ -16,7 +16,7 @@ unregister_dopar = function() { #function to un-register parallel processing in 
 }
 
 # Load data and select final DVs
-load(file = "sf_data_CLEAN.Rda")
+load(file = "Data/processed/sf_data_CLEAN.Rda")
 df_data_CLEAN = sf_data_CLEAN %>%
   st_set_geometry(NULL) %>%
   mutate(ln_hrs = log(duration_hr)) %>% 
