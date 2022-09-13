@@ -4,6 +4,10 @@ library(tidymodels)
 library(sf)
 library(parallel)
 library(doParallel)
+library(xgboost)
+library(vip)
+library(spdep)
+library(pdp)
 
 
 ## Testing results
@@ -89,3 +93,22 @@ plot_filtering_estimates2 <- function(df) {
 }
 plot_filtering_estimates2(gg)
 
+
+##########################################################################################################
+##### VARIABLE IMPORTANCE - FINAL MODEL ##################################################################
+##########################################################################################################
+#https://www.rebeccabarter.com/blog/2020-03-25_machine_learning/#variable-importance
+#https://towardsdatascience.com/be-careful-when-interpreting-your-features-importance-in-xgboost-6e16132588e7
+#https://stackoverflow.com/questions/57360703/feature-importance-gain-in-xgboost
+#https://xgboost.readthedocs.io/en/stable/R-package/discoverYourData.html
+#https://bgreenwell.github.io/pdp/articles/pdp-example-xgboost.html
+#https://bgreenwell.github.io/pdp/articles/pdp-extending.html
+#https://christophm.github.io/interpretable-ml-book/ice.html
+#https://datascience.stackexchange.com/questions/15305/how-does-xgboost-learn-what-are-the-inputs-for-missing-values
+final_model = xgb_work %>%
+  finalize_workflow(xgb_best) %>%
+  fit(df_data_CLEAN)
+final_obj = extract_fit_parsnip(final_model)$fit
+importance = xgb.importance(model = final_obj)
+head(importance, n = 20) 
+vip(final_obj, n = 20)

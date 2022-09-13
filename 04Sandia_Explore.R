@@ -1,25 +1,10 @@
-## Load and join data sets
+#### Look at frequency of events based on socioeconomic status 
 require(tidyverse)
 require(tidycensus) 
 require(tidymodels)
 require(sf)
 require(lubridate)
 require(corrplot)
-
-# ### Get census base map
-# year = 2019
-# mycrs = 5070 #chose projected coordinate system: EPSG 5070 NAD83 Conus Albers
-# options(tigris_use_cache = TRUE) #cache shapefiles for future sessions
-# state_list = c("AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "IA", "ID", "IL", "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC", "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY")
-# county_map = get_acs(geography = "county", state = state_list,
-#                      variables=c("B01003_001"), year = year, geometry = TRUE, 
-#                      cache_table = TRUE)
-# county_map = county_map %>%
-#   mutate(POPULATION = estimate) %>%
-#   dplyr::select(GEOID, NAME, POPULATION) 
-# county_map_proj = county_map %>% 
-#   st_transform(mycrs) # project to Conic Equal Area Albers, EPSG:5070
-# save(county_map_proj, file = "Data/processed/county_map_proj.Rda")
 
 ################################################################################
 # LOAD DATA ####################################################################
@@ -49,13 +34,6 @@ county_map_rz = county_map_rz %>%
   select(GEOID, RZ_mean, RZ_med, RZ_mode) %>%
   st_set_geometry(NULL)
 
-# SPI (monthly)
-load(file = "Data/processed/county_proj_spi.Rda")
-county_map_spi = county_proj_spi %>%
-  mutate(date_ym = str_extract(Date, "^.{7}")) %>% # returns yyyy-mm
-  dplyr::select(-NAME, -Date, -POPULATION) %>%
-  st_set_geometry(NULL)
-
 ## Socio-Economic Data
 # ## County-level indicators
 load(file = "Data/processed/county_proj_social.Rda") 
@@ -75,14 +53,12 @@ county_map_outages = county_proj_outages %>%
 ## Join data frames 
 county_map_JOIN = county_map_area %>%
   inner_join(county_map_outages, by = c("GEOID")) %>% #inner join b/c we don't care about counties w/o events
-  left_join(county_map_spi, by = c("GEOID" = "GEOID", "start_ym" = "date_ym")) %>%
   left_join(county_map_nlcd, by = c("GEOID")) %>%
   left_join(county_map_dem, by = c("GEOID")) %>%
   left_join(county_map_rz, by = c("GEOID")) %>%
   left_join(county_map_social, by = c("GEOID"))
 
-## Remove uneccessary and extraneous variables (e.g., WIND2M and WIND10M are basically the same)
-# MERRA event categories that we use to derive ours
+# MERRA event categories
 events_list = c(
   "drought",
   "excessive_heat",
@@ -111,51 +87,69 @@ events_list = c(
   "winter_weather"
 )
 
-county_map_ALL = county_map_JOIN %>%
+our_events = c(
+  "droughts",
+  "extreme_cold",
+  "extreme_heat",
+  "floods",
+  "hail",
+  "high_winds",
+  "hurricanes",
+  "tornadoes",
+  "wildfires",
+  "winter_storms"
+)
+
+county_map_EXPLORE = county_map_JOIN %>%
   dplyr::select(-c(outage_number, start_dt, start_ym, end_dt, end_ym)) %>% #these aren't used for ML
   #dplyr::select(-c(mean_cust_out, mean_frac_cust_out)) %>% #don't care about mean values during an outage (only Max)
-  dplyr::select(-c(all_of(events_list))) %>% #strip out MERRA event categories 
+  dplyr::select(-c(all_of(our_events))) %>% #strip out event categories 
   dplyr::select(-c(max_WIND2M, max_WIND50M, min_WIND2M, min_WIND50M, 
                    min_humidity_2M, mean_humidity_2M, max_humidity_2M, #just use 10-meter for all of these
                    min_T2M, mean_T2M, max_T2M, delta_T2M, delta_WIND2M, delta_WIND50M)) %>%
   dplyr::select(-c(min_T10M_C, max_T10M_C, mean_T10M_C, min_T2M_C, max_T2M_C, mean_T2M_C, delta_T2M_C, delta_T10M_C)) %>% #already have these in Kelvin 
   dplyr::select(-c(WETLAND)) #already have Wetlands 
-#save(county_map_ALL, file = "Data/processed/county_map_ALL.Rda")
 
-## Checks to make sure MERRA definitions add up to our event indicator flags
-# asd = county_map_JOIN %>%
-#   filter(hurricanes == 1)
-# asd2 = county_map_JOIN %>%
-#   filter(hurricane > 0 | hurricane_typhoon > 0 | tropical_depression > 0 | tropical_storm > 0)
-
-################################################################################
-### CLEAN DATA #################################################################
-################################################################################
 # Filter data to large events 
-sf_data = county_map_ALL %>%
+sf_data = county_map_EXPLORE %>%
   dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
 
-# Clean predictors
-sf_pred = sf_data %>% 
-  dplyr::select(c(duration_hr, DENSITY, droughts:WATEFF)) %>% #select only predictors (and 1 DV)
-  st_set_geometry(NULL)
-# sf_pred_weather = sf_pred %>% dplyr::select(droughts:delta_WIND10M) %>% dplyr::select(-c(hail, tornadoes))
-# asd = cor(sf_pred_weather, use = "complete.obs")
-# corrplot(asd, type = "full")
+# Group and Summarize by county
+df_data_group = sf_data %>%
+  st_set_geometry(NULL) %>%
+  dplyr::select(GEOID, all_of(events_list)) %>%
+  group_by(GEOID) %>%
+  summarise(across(all_of(events_list), ~ sum(.x, na.rm = TRUE)))
 
-clean_recipe = recipe(duration_hr ~ . , data = sf_pred) %>%
+#Convert Merra groupings to ours 
+df_events_group = df_data_group %>%
+  mutate(droughts = drought) %>%
+  dplyr::select(-c(all_of(events_list)))
+
+#Group predictors by GEOID 
+df_data_group_pred = sf_data %>%
+  st_set_geometry(NULL) %>%
+  dplyr::select(GEOID, DENSITY, Barren:WATEFF) %>%
+  group_by(GEOID) %>%
+  summarise_all(first)
+
+# Clean predictors
+clean_recipe = recipe(GEOID ~ . , data = df_data_group_pred) %>%
   #step_rm(ln_hrs, contains("total")) %>% #remove total_ice and total_liquid 
   step_impute_knn(all_predictors()) %>% #knn impute missing predictors (if any)
   #step_normalize(all_predictors()) %>% #z-score standardize all predictors (important for PLS or NN)
   step_zv(all_predictors()) %>% #removes predictors of single value 
   step_corr(all_predictors(), threshold = .9)  #removes highly correlated 
-sf_pred_CLEAN = prep(clean_recipe) %>% juice() 
+df_pred_CLEAN = prep(clean_recipe) %>% juice() %>% dplyr::select(-GEOID)
 clean_prep = prep(clean_recipe) #see changes
-# sf_pred_CLEAN_weather = sf_pred_CLEAN %>% dplyr::select(droughts:delta_WIND10M)
-# asd2 = cor(sf_pred_CLEAN_weather, use = "complete.obs")
-# corrplot(asd2, type = "full")
 
-sf_data_CLEAN = sf_data %>% 
-  dplyr::select(c(GEOID, POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out)) %>%
-  bind_cols(sf_pred_CLEAN)
-#save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")
+sf_data_EVENTS = sf_data %>%
+  group_by(GEOID) %>%
+  summarise(POPULATION = first(POPULATION)) %>%
+  inner_join(df_events_group, by = c("GEOID")) %>%
+  bind_cols(df_pred_CLEAN)
+#save(sf_data_EVENTS, file = "Data/processed/sf_data_EVENTS.Rda")
+
+
+  
+  
