@@ -8,6 +8,12 @@ library(xgboost)
 library(vip)
 library(spdep)
 library(pdp)
+# library(drat)
+# addRepo("geanders")
+# install.packages("hurricaneexposuredata")
+library(hurricaneexposuredata)
+library(hurricaneexposure)
+library(tidycensus)
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
@@ -33,14 +39,19 @@ our_events = c(
 )
 
 # Load data and select final DVs and GROUP by GEOID
+load(file = "Data/processed/sf_data_ALL.Rda")
 load(file = "Data/processed/sf_data_CLEAN.Rda")
-df_data_EVENTS = sf_data_CLEAN %>%
+sf_data_select = sf_data_ALL #Select ALL outages or >=12 hrs (CLEAN)
+
+# Summarize events by counts (or total hours)
+df_data_EVENTS = sf_data_select %>%
   st_set_geometry(NULL) %>%
-  dplyr::select(-duration_hr) %>%
   dplyr::select(-c(mean_cust_out:max_frac_cust_out, max_WIND10M:spi24)) %>% #strip out all dynamic factors 
   group_by(GEOID) %>% 
-  summarise(across(all_of(our_events), ~ sum(.x, na.rm = TRUE)))
+  #summarise(across(all_of(our_events), ~ sum(.x, na.rm = TRUE))) #total counts of each event
+  summarise(across(all_of(our_events), ~ sum(.x * duration_hr, na.rm = TRUE))) #total hrs of each event
 
+# Summarize other variables by just taking first value (all the same)
 df_data_OTHER = sf_data_CLEAN %>%
   st_set_geometry(NULL) %>%
   dplyr::select(-duration_hr) %>%
@@ -49,7 +60,10 @@ df_data_OTHER = sf_data_CLEAN %>%
   group_by(GEOID) %>% 
   summarise(across(everything(), first))
 
+# Combine summarized dataframes 
 df_data_CLEAN = df_data_EVENTS %>%
+  mutate(across(all_of(our_events), ~ .x / 5 )) %>% #annualize
+  #mutate(across(all_of(our_events), ~ jitter(log(.x / 5 + 0.001)))) %>% #annualize, take log, and add noise
   inner_join(df_data_OTHER, by = "GEOID")
 
 # Split into training vs testing
@@ -60,10 +74,26 @@ df_test = testing(df_split)
 df_cv = vfold_cv(df_train, v = 10, repeats = 1)
 df_preds = df_data_CLEAN %>% dplyr::select(-c(GEOID, POPULATION, all_of(our_events)))
 
-# Recipes for tidymodels 
+# Recipes for different events 
 recipe_hurricanes = recipe(hurricanes ~ . , data = df_data_CLEAN) %>% 
   step_rm(GEOID, POPULATION, droughts, extreme_cold, extreme_heat, floods, high_winds, wildfires, winter_storms) %>% 
   step_naomit(hurricanes)
+
+recipe_winter = recipe(winter_storms ~ . , data = df_data_CLEAN) %>% 
+  step_rm(GEOID, POPULATION, droughts, extreme_cold, extreme_heat, floods, high_winds, wildfires, hurricanes) %>% 
+  step_naomit(winter_storms)
+
+recipe_highwind = recipe(high_winds ~ . , data = df_data_CLEAN) %>% 
+  step_rm(GEOID, POPULATION, droughts, extreme_cold, extreme_heat, floods, winter_storms, wildfires, hurricanes) %>% 
+  step_naomit(high_winds)
+
+recipe_droughts = recipe(droughts ~ . , data = df_data_CLEAN) %>% 
+  step_rm(GEOID, POPULATION, hurricanes, extreme_cold, extreme_heat, floods, high_winds, wildfires, winter_storms) %>% 
+  step_naomit(droughts)
+
+recipe_floods = recipe(floods ~ . , data = df_data_CLEAN) %>% 
+  step_rm(GEOID, POPULATION, droughts, extreme_cold, extreme_heat, hurricanes, high_winds, wildfires, winter_storms) %>% 
+  step_naomit(floods)
 
 ################################################################################
 #### MACHINE LEARNING ##########################################################
@@ -139,12 +169,12 @@ xgb_predictions = xgb_fit %>% collect_predictions() #predictions for test sample
 
 rsq_xgb = paste(xgb_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_xgb = paste(show_best(xgb_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
-
+  
 ### PLOTTING - Duration Hours
-gg = dplyr::tibble(actual = y_test / 5, #divide by 5 to annualize
-                   eNet = as.vector(lre_predictions$.pred) / 5,
+gg = dplyr::tibble(actual = y_test, 
+                   eNet = as.vector(lre_predictions$.pred),
                    #rf = as.vector(rf_predictions$.pred),
-                   xgb = as.vector(xgb_predictions$.pred) / 5
+                   xgb = as.vector(xgb_predictions$.pred)
 )
 gg = arrange(gg, actual)
 gg$index = seq.int(nrow(gg))
@@ -189,9 +219,9 @@ plot_filtering_estimates2 <- function(df) {
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")
       ),
       name = element_blank()) + 
-    ylab("Severe Outages due to Hurricanes (per year)") + 
+    ylab("Expected Outage Hours per Year (Hurricanes)") + 
     scale_y_continuous(labels = function(x) paste0(x)) +
-    xlab("Outage Index (event x county)") +
+    xlab("County Index") +
     #ggtitle("County-Level Predictions: Test Sample\nNo 'Total' Variables") + 
     ggtitle("County-Level Predictions: Test Sample") + 
     # guides(
@@ -219,8 +249,11 @@ plot_filtering_estimates2(gg)
 #https://xgboost.readthedocs.io/en/stable/R-package/discoverYourData.html
 #https://bgreenwell.github.io/pdp/articles/pdp-example-xgboost.html
 #https://bgreenwell.github.io/pdp/articles/pdp-extending.html
+#https://christophm.github.io/interpretable-ml-book/pdp.html
 #https://christophm.github.io/interpretable-ml-book/ice.html
+#https://medium.com/dataman-in-ai/how-is-the-partial-dependent-plot-computed-8d2001a0e556
 #https://datascience.stackexchange.com/questions/15305/how-does-xgboost-learn-what-are-the-inputs-for-missing-values
+
 final_model = xgb_work %>%
   finalize_workflow(xgb_best) %>%
   fit(df_data_CLEAN)
@@ -229,7 +262,6 @@ importance = xgb.importance(model = final_obj)
 head(importance, n = 20) 
 vip(final_obj, n = 20)
 
-
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################
 ##########################################################################################################
@@ -237,28 +269,157 @@ X_train = df_train %>% dplyr::select(-c(GEOID, POPULATION, all_of(our_events)))
 pdp1 = pdp::partial(final_obj, pred.var = "Wetlands", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp2 = pdp::partial(final_obj, pred.var = "DEM_max", ice = F, center = F,
+pdp2 = pdp::partial(final_obj, pred.var = "DEM_sd", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp3= pdp::partial(final_obj, pred.var = "QBLACK", ice = F, center = F,
+pdp3= pdp::partial(final_obj, pred.var = "DEM_min", ice = F, center = F,
                    plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                    train = X_train, type = "regression")
-pdp4 = pdp::partial(final_obj, pred.var = "DEM_sd", ice = F, center = F,
+pdp4 = pdp::partial(final_obj, pred.var = "QMOHO", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp5 = pdp::partial(final_obj, pred.var = "QMOHO", ice = F, center = F,
+pdp5 = pdp::partial(final_obj, pred.var = "GENDINC", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp6 = pdp::partial(final_obj, pred.var = "EDEQUITY", ice = F, center = F,
+pdp6 = pdp::partial(final_obj, pred.var = "QBLACK", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp7 = pdp::partial(final_obj, pred.var = "DEM_min", ice = F, center = F,
+pdp7 = pdp::partial(final_obj, pred.var = "PATTACHRES", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
-pdp8 = pdp::partial(final_obj, pred.var = "QHLTH", ice = F, center = F,
+pdp8 = pdp::partial(final_obj, pred.var = "QHLTH65", ice = F, center = F,
                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression")
 
 grid.arrange(pdp1, pdp2, pdp3, pdp4, ncol = 2)
 grid.arrange(pdp5, pdp6, pdp7, pdp8, ncol = 2)
 
+
+##########################################################################################################
+##### CREATE MAPS  #######################################################################################
+##########################################################################################################
+# Base map
+load(file = "Data/processed/county_map_proj.Rda")
+county_map_area = county_map_proj %>%  
+  mutate(AREA = as.vector(st_area(county_map_proj))) %>% #sq-meters; as.vector removes units suffix 
+  mutate(DENSITY = POPULATION / AREA * 1000^2) %>% #population per sq-km 
+  dplyr::select(-c(AREA, NAME)) 
+
+# NLCD (static)
+load(file = "Data/processed/county_proj_nlcd.Rda")
+county_map_nlcd = county_map_nlcd %>%
+  dplyr::select(-c(NAME, POPULATION, ID, Other, Total)) %>%
+  st_set_geometry(NULL)
+
+# DEM (static)
+load(file = "Data/processed/county_proj_dem.Rda")
+county_map_dem = county_proj_dem %>%
+  select(GEOID, DEM_mean, DEM_med, DEM_sd, DEM_min, DEM_max) %>%
+  st_set_geometry(NULL)
+
+# Root Zone (static)
+load(file = "Data/processed/county_proj_rz.Rda")
+county_map_rz = county_map_rz %>%
+  select(GEOID, RZ_mean, RZ_med, RZ_mode) %>%
+  st_set_geometry(NULL)
+
+# Socio-Economic Data
+load(file = "Data/processed/county_proj_social.Rda") 
+county_map_social = county_proj_social %>%
+  dplyr::select(-NAME, -POPULATION) %>%
+  st_set_geometry(NULL)
+
+# Join data frames 
+county_map_JOIN = county_map_area %>%
+  left_join(county_map_nlcd, by = c("GEOID")) %>%
+  left_join(county_map_dem, by = c("GEOID")) %>%
+  left_join(county_map_rz, by = c("GEOID")) %>%
+  left_join(county_map_social, by = c("GEOID"))
+
+# Select GEOID and predictors in final mobel (final_obj)
+df_join = county_map_JOIN %>%
+  dplyr::select(GEOID, final_obj$feature_names) %>%
+  st_set_geometry(NULL)
+
+# Impute missing predictors 
+impute_recipe = recipe(GEOID ~ ., data = df_join) %>%
+  step_impute_knn(all_predictors())
+
+# Matrix of predictors
+X = prep(impute_recipe) %>%
+  juice() %>%
+  dplyr::select(-GEOID) %>%
+  as.matrix()
+
+# Predict 
+predictions = predict(final_obj, X)
+
+# Join predictions to SF
+sf_map = county_map_JOIN %>%
+  dplyr::select(GEOID, POPULATION) %>%
+  mutate(pred = predictions)
+
+gg3 = ggplot()+
+  geom_sf(data = sf_map, aes(fill = pred), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+  geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
+  theme_dark() +
+  labs(title = "Expected Annual Power Outages \n-- Hurricanes --", fill = "Hours") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg3)
+
+
+##########################################################################################################
+##### HURRICANE EXPOSURE  ################################################################################
+##########################################################################################################
+## https://cran.r-project.org/web/packages/hurricaneexposure/vignettes/hurricaneexposure.html
+county_list = sf_map$GEOID
+hurricane_exposure = county_wind(counties = c(county_list), start_year = 2015, end_year = 2019, wind_limit = 0.01)
+hurricane_summ = hurricane_exposure %>%
+  group_by(fips) %>%
+  summarize(AVG_WIND = mean(vmax_sust))
+hurricane_map = sf_map %>%
+  left_join(hurricane_summ, by = c("GEOID" = "fips"))
+
+gg3 = ggplot()+
+  geom_sf(data = hurricane_map, aes(fill = AVG_WIND), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+  geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
+  theme_dark() +
+  labs(title = "Hurricane Exposure \n2015 - 2019", fill = "Mean \nWind (m/s)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg3)
+
+cor(hurricane_map$AVG_WIND, hurricane_map$pred, use = "complete.obs")
+# 0.635
+
+## Hurricane deep dive
+county_zoom_list = c("FL", "GA", "AL", "SC", "NC")
+county_zoom = get_acs(geography = "county", state = county_zoom_list,
+                      variables=c("B01003_001"), year = 2019, geometry = TRUE, 
+                      cache_table = TRUE) %>%
+  mutate(POPULATION = estimate) %>%
+  dplyr::select(GEOID, NAME) %>%
+  st_transform(5070) 
+
+county_zoom_map = county_zoom %>%
+  inner_join((st_set_geometry(hurricane_map, NULL)), by = "GEOID") %>%
+  inner_join(df_join, by = "GEOID")
+
+gg4 = ggplot()+
+  geom_sf(data = county_zoom_map, aes(fill = QBLACK), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+  geom_sf(data = county_zoom_map, fill = NA, color = "black", lwd = 0.1) + 
+  theme_dark() +
+  labs(title = "Hurricane Exposure (2015 - 2019)", fill = "Mean \nWind (m/s)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg4)

@@ -116,6 +116,8 @@ county_map_ALL = county_map_JOIN %>%
   #dplyr::select(-c(mean_cust_out, mean_frac_cust_out)) %>% #don't care about mean values during an outage (only Max)
   dplyr::select(-c(all_of(events_list))) %>% #strip out MERRA event categories 
   dplyr::select(-c(max_WIND2M, max_WIND50M, min_WIND2M, min_WIND50M, 
+                   min_WIND10M, #linear combination of max_WIND10M and delta_WIND10M
+                   RZ_mean, #highly correlated with RZ_med and truncated at upper values
                    min_humidity_2M, mean_humidity_2M, max_humidity_2M, #just use 10-meter for all of these
                    min_T2M, mean_T2M, max_T2M, delta_T2M, delta_WIND2M, delta_WIND50M)) %>%
   dplyr::select(-c(min_T10M_C, max_T10M_C, mean_T10M_C, min_T2M_C, max_T2M_C, mean_T2M_C, delta_T2M_C, delta_T10M_C)) %>% #already have these in Kelvin 
@@ -131,9 +133,7 @@ county_map_ALL = county_map_JOIN %>%
 ################################################################################
 ### CLEAN DATA #################################################################
 ################################################################################
-# Filter data to large events 
-sf_data = county_map_ALL %>%
-  dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
+sf_data = county_map_ALL
 
 # Clean predictors
 sf_pred = sf_data %>% 
@@ -148,14 +148,20 @@ clean_recipe = recipe(duration_hr ~ . , data = sf_pred) %>%
   step_impute_knn(all_predictors()) %>% #knn impute missing predictors (if any)
   #step_normalize(all_predictors()) %>% #z-score standardize all predictors (important for PLS or NN)
   step_zv(all_predictors()) %>% #removes predictors of single value 
-  step_corr(all_predictors(), threshold = .9)  #removes highly correlated 
+  step_corr(all_predictors(), threshold = .875)  #removes highly correlated 
 sf_pred_CLEAN = prep(clean_recipe) %>% juice() 
-clean_prep = prep(clean_recipe) #see changes
+# clean_prep = prep(clean_recipe) #see changes
 # sf_pred_CLEAN_weather = sf_pred_CLEAN %>% dplyr::select(droughts:delta_WIND10M)
 # asd2 = cor(sf_pred_CLEAN_weather, use = "complete.obs")
 # corrplot(asd2, type = "full")
 
-sf_data_CLEAN = sf_data %>% 
+# Data set with cleaned predictors and ALL events
+sf_data_ALL = sf_data %>% 
   dplyr::select(c(GEOID, POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out)) %>%
   bind_cols(sf_pred_CLEAN)
+#save(sf_data_ALL, file = "Data/processed/sf_data_ALL.Rda")
+
+# Filter data to large events 
+sf_data_CLEAN = sf_data_ALL %>%
+  dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
 #save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")

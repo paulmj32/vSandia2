@@ -42,7 +42,7 @@ recipe_pct = recipe(pct_cust ~ . , data = df_data_CLEAN) %>% step_rm(ln_hrs, ln_
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe you want to use 
-recipe_mine = recipe_pct
+recipe_mine = recipe_hrs
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
