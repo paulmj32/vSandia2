@@ -144,7 +144,7 @@ sf_pred = sf_data %>%
 # corrplot(asd, type = "full")
 
 clean_recipe = recipe(duration_hr ~ . , data = sf_pred) %>%
-  #step_rm(ln_hrs, contains("total")) %>% #remove total_ice and total_liquid 
+  step_rm(contains("total")) %>% #remove total_ice and total_liquid 
   step_impute_knn(all_predictors()) %>% #knn impute missing predictors (if any)
   #step_normalize(all_predictors()) %>% #z-score standardize all predictors (important for PLS or NN)
   step_zv(all_predictors()) %>% #removes predictors of single value 
@@ -159,9 +159,9 @@ sf_pred_CLEAN = prep(clean_recipe) %>% juice()
 sf_data_ALL = sf_data %>% 
   dplyr::select(c(GEOID, POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out)) %>%
   bind_cols(sf_pred_CLEAN)
-#save(sf_data_ALL, file = "Data/processed/sf_data_ALL.Rda")
+#save(sf_data_ALL, file = "Data/processed/sf_data_ALL_nototal.Rda")
 
-# Filter data to large events 
-sf_data_CLEAN = sf_data_ALL %>%
-  dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
-#save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")
+# # Filter data to large events 
+# sf_data_CLEAN = sf_data_ALL %>%
+#   dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
+# #save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")

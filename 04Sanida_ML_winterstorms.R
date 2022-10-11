@@ -68,7 +68,7 @@ df_data_CLEAN = df_data_EVENTS %>%
 
 # Split into training vs testing
 set.seed(23)
-df_split = initial_split(df_data_CLEAN, prop = 0.80, strata = "high_winds")
+df_split = initial_split(df_data_CLEAN, prop = 0.80, strata = "winter_storms")
 df_train = training(df_split)
 df_test = testing(df_split)  
 df_cv = vfold_cv(df_train, v = 10, repeats = 1)
@@ -99,8 +99,8 @@ recipe_floods = recipe(floods ~ . , data = df_data_CLEAN) %>%
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe you want to use 
-recipe_mine = recipe_highwind
-y_test = df_test$high_winds
+recipe_mine = recipe_winter
+y_test = df_test$winter_storms
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -219,7 +219,7 @@ plot_filtering_estimates2 <- function(df) {
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")
       ),
       name = element_blank()) + 
-    ylab("Expected Outage Hours per Year (High Winds)") + 
+    ylab("Expected Outage Hours per Year (Winter Storms)") + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("County Index") +
     #ggtitle("County-Level Predictions: Test Sample\nNo 'Total' Variables") + 
@@ -364,7 +364,7 @@ gg3 = ggplot()+
   scale_fill_viridis_c(option="plasma", na.value = "grey50") +
   geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
   theme_dark() +
-  labs(title = "Expected Annual Power Outages \n-- High Winds --", fill = "Hours") +
+  labs(title = "Expected Annual Power Outages \n-- Winter Storms --", fill = "Hours") +
   theme(plot.title = element_text(hjust = 0.5),
         axis.title.x = element_blank(),
         axis.title.y = element_blank()
