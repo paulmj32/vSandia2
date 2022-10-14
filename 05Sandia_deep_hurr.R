@@ -1,32 +1,36 @@
 #### Machine learning 
+options(java.parameters = "-Xmx10g")
+library(bartMachine)
 library(tidyverse)
 library(tidymodels)
+library(tidycensus)
 library(sf)
+library(xgboost)
 library(parallel)
 library(doParallel)
-library(xgboost)
 library(vip)
 library(spdep)
-library(spatialreg)
 library(pdp)
-# library(drat)
+# library(drat) # these are used to install hurricaneexposure
 # addRepo("geanders")
 # install.packages("hurricaneexposuredata")
 library(hurricaneexposuredata)
 library(hurricaneexposure)
-library(tidycensus)
+library(spatialreg)
 library(gstat)
 library(ggpubr)
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
 ################################################################################
+#sort(sapply(ls(),function(x){object.size(get(x))}), decreasing = T)
 # Parallel processing setup
 num_cores = detectCores() - 1
 unregister_dopar = function() { #function to un-register parallel processing in doParallel
   env <- foreach:::.foreachGlobals
   rm(list=ls(name=env), pos=env)
 }
+set_bart_machine_num_cores(num_cores = num_cores)
 
 our_events = c(
   "droughts",
@@ -57,7 +61,7 @@ rm(list=c("sf_data_ALL"))
 gc() 
 
 df_data = sf_data %>%
-  st_set_geometry(NULL) 
+  st_set_geometry(NULL)
 
 # Split into training vs testing
 set.seed(23)
@@ -68,15 +72,19 @@ df_cv = vfold_cv(df_train, v = 10, repeats = 1)
 df_preds = df_data %>% dplyr::select(-c(ln_hrs, ln_cust, pct_cust, GEOID))
 
 # Recipes for tidymodels 
-recipe_hrs = recipe(ln_hrs ~ . , data = df_data) %>% step_rm(ln_cust, pct_cust, GEOID)
+recipe_hrs = recipe(ln_hrs ~ . , data = df_data) %>% step_rm(ln_cust, pct_cust, GEOID) %>% step_naomit(ln_hrs)
 recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, GEOID) %>% step_naomit(pct_cust)
 
 ################################################################################
 #### MACHINE LEARNING ##########################################################
 ################################################################################
-### Define which recipe you want to use 
-recipe_mine = recipe_hrs
-y_test = df_test$ln_hrs
+### Define which recipe and responses you want to use 
+recipe_mine = recipe_pct
+y_train = df_train %>% na.omit() %>% pull(pct_cust)
+y_test = df_test %>% na.omit() %>% pull(pct_cust)
+
+X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -142,25 +150,45 @@ xgb_predictions = xgb_fit %>% collect_predictions() #predictions for test sample
 rsq_xgb = paste(xgb_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_xgb = paste(show_best(xgb_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
   
-### PLOTTING - Duration Hours
+### BART #######################################################################
+bart_fit = bartMachineCV(data.frame(X_train), y_train, k_folds = 10, serialize = T) #bartMachine CV win: k: 5 nu, q: 10, 0.75 m: 50
+bart_predictions = predict(bart_fit, data.frame(X_test))
+#save(bart_fit, file = "bart_fit.Rda")
+
+rsq_bart = format(round(1 - sum((y_test - bart_predictions)^2) / sum((y_test - mean(y_test))^2), 3), nsmall = 3)
+bart_cv = k_fold_cv(data.frame(X_train), y_train, k_folds = 10)
+cverror_bart = format(round(bart_cv$rmse, 3), nsmall = 3)
+
+### SPATIAL REGRESSION #########################################################
+#https://rpubs.com/quarcs-lab/tutorial-spatial-regression
+# sf_train_sreg = county_map_proj %>%
+#   inner_join(df_data, by = "GEOID") %>%
+#   dplyr::select(-c(GEOID, NAME, POPULATION, ln_cust, pct_cust))
+# neighbors = poly2nb(sf_train_sreg, queen = T) #find county neighbors 
+# weights = nb2listw(include.self(neighbors)) #include self for weights
+# sdm.eq = as.formula(paste("ln_hrs", 
+#                           paste(colnames(sf_train_sreg)[2:length(colnames(sf_train_sreg))-1], collapse = " + "), 
+#                           sep = " ~ "))
+# asd = spatialreg::lagsarlm(formula = sdm.eq, data = sf_train_sreg, listw = weights, type = "mixed")
+
+##########################################################################################################
+##### PLOTTING ###########################################################################################
+##########################################################################################################
 gg = dplyr::tibble(actual = y_test, 
                    eNet = as.vector(lre_predictions$.pred),
+                   bart = as.vector(bart_predictions),
                    #rf = as.vector(rf_predictions$.pred),
                    xgb = as.vector(xgb_predictions$.pred)
 )
 gg = arrange(gg, actual)
 gg$index = seq.int(nrow(gg))
-#gg = gg %>% filter(eNet < 20)
-#gg$mean = mean(gg$actual, na.rm = T)
 gg_actual = gg %>% dplyr::select(index, actual)
 gg_pred = gg %>% dplyr::select(-actual) %>% pivot_longer(!index, names_to = "Model", values_to = "ypred")
 gg_all = gg %>% pivot_longer(!index, names_to = "Model", values_to = "ypred")
-color_vec= c("black", "#FDE725FF", "#35B779FF")
-#color_vec = c("black", "#FDE725FF", "#35B779FF", "#440154FF")
-lty_vec = c(1, 1, 1)
-#lty_vec = c(1, 1, 1, 1)
-alpha_vec = c(1, 0.7, 0.7)
-#alpha_vec = c(1, 0.7, 0.7, 0.7)
+
+color_vec = c("black", "#FDE725FF", "#35B779FF", "#440154FF")
+lty_vec = c(1, 1, 1, 1)
+alpha_vec = c(1, 0.6, 0.6, 0.6)
 
 plot_filtering_estimates2 <- function(df) {
   p = ggplot() + 
@@ -170,31 +198,31 @@ plot_filtering_estimates2 <- function(df) {
     scale_color_manual(
       values = color_vec, 
       labels = c("Actual",
+                 bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_bart) * ")"),
                  bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_lre) * ")"), 
-                 #bquote("RF (" * R^2 ~ "=" ~ .(rsq_rf) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_rf) * ")"), 
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")
       ),
       name = element_blank()) +
     scale_linetype_manual(
       values = lty_vec,
       labels = c("Actual",
+                 bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_bart) * ")"),
                  bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_lre) * ")"), 
-                 #bquote("RF (" * R^2 ~ "=" ~ .(rsq_rf) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_rf) * ")"), 
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")         
       ),
       name = element_blank()) + 
     scale_alpha_manual(
       values = alpha_vec,
       labels = c("Actual",
+                 bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_bart) * ")"),
                  bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_lre) * ")"), 
-                 #bquote("RF (" * R^2 ~ "=" ~ .(rsq_rf) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_rf) * ")"), 
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")
       ),
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
-    xlab("County x Event Index") +
-    ylab("Hours (ln)") + 
-    ggtitle("Hurricane Outage Duration: Test Sample") + 
+    xlab("Index (County x Event)") +
+    ylab("Max Customers Out (%)") + 
+    ggtitle("Hurricane Outages: Test Sample") + 
     # guides(
     #   color = guide_legend(order = 2),
     #   shape = guide_legend(order = 1),
@@ -224,6 +252,10 @@ plot_filtering_estimates2(gg)
 #https://christophm.github.io/interpretable-ml-book/ice.html
 #https://medium.com/dataman-in-ai/how-is-the-partial-dependent-plot-computed-8d2001a0e556
 #https://datascience.stackexchange.com/questions/15305/how-does-xgboost-learn-what-are-the-inputs-for-missing-values
+final_lre = lre_work %>%
+  finalize_workflow(lre_best) %>%
+  fit(df_data)
+print(tidy(final_lre), n = 150)
 
 final_model = xgb_work %>%
   finalize_workflow(xgb_best) %>%
@@ -233,10 +265,7 @@ importance = xgb.importance(model = final_obj)
 head(importance, n = 20) 
 vip(final_obj, n = 20)
 
-final_lre = lre_work %>%
-  finalize_workflow(lre_best) %>%
-  fit(df_data)
-print(tidy(final_lre), n = 150)
+bart_vimp = investigate_var_importance(bart_fit)
 
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################
@@ -352,6 +381,8 @@ shapiro.test(res)
 # Heteroskedacity of residuals
 fitted = as.vector(xgb_predictions$.pred) 
 plot(fitted, res_xgb)
+
+bart_assmp = check_bart_error_assumptions(bart_fit)
 
 # Spatial dependency of residuals
 rr = data.frame(as.factor(df_test$GEOID))
