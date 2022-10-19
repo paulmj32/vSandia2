@@ -52,7 +52,8 @@ sf_data = sf_data_ALL %>%
   dplyr::filter(hurricanes >= 1) %>% #filter to event of interest
   mutate(ln_hrs = log(duration_hr)) %>% 
   mutate(ln_cust = log(max_cust_out)) %>% 
-  mutate(pct_cust = max_frac_cust_out) %>%
+  #mutate(pct_cust = max_frac_cust_out) %>%
+  mutate(pct_cust = log(max_frac_cust_out)) %>%
   dplyr::select(-c(POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out, 
                    duration_hr, all_of(our_events), avalanche)) %>%
   relocate(c(ln_hrs, ln_cust, pct_cust))
@@ -97,12 +98,19 @@ recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, 
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe and responses you want to use 
-recipe_mine = recipe_hrs
-y_train = df_train %>% pull(ln_hrs) %>% na.omit() 
-y_test = df_test %>% pull(ln_hrs) %>% na.omit() 
+recipe_mine = recipe_pct
 
-X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
-X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+## Recipe - ln_hrs
+# y_train = df_train %>% pull(ln_hrs) %>% na.omit() 
+# y_test = df_test %>% pull(ln_hrs) %>% na.omit() 
+# X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+# X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+
+## Recipe - pct_cust
+y_train = df_train %>% na.omit() %>% pull(pct_cust)
+y_test = df_test %>% na.omit() %>% pull(pct_cust)
+X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -239,7 +247,7 @@ plot_filtering_estimates2 <- function(df) {
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("Index (County x Event)") +
-    ylab("Hours (ln)") + 
+    ylab("Max Customers Out (ln - %)") + 
     ggtitle("Hurricane Outage Duration: Test Sample\n -- Five Factors --") + 
     # guides(
     #   color = guide_legend(order = 2),

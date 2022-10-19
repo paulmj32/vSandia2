@@ -1,19 +1,24 @@
 #### Machine learning 
+options(java.parameters = "-Xmx10g")
+library(bartMachine)
 library(tidyverse)
 library(tidymodels)
+library(tidycensus)
 library(sf)
+library(xgboost)
 library(parallel)
 library(doParallel)
-library(xgboost)
 library(vip)
 library(spdep)
 library(pdp)
-# library(drat)
+# library(drat) # these are used to install hurricaneexposure
 # addRepo("geanders")
 # install.packages("hurricaneexposuredata")
 library(hurricaneexposuredata)
 library(hurricaneexposure)
-library(tidycensus)
+library(spatialreg)
+library(gstat)
+library(ggpubr)
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
@@ -39,20 +44,59 @@ our_events = c(
 )
 
 # Load data and select final DVs and GROUP by GEOID
-load(file = "Data/processed/sf_data_ALL.Rda")
-load(file = "Data/processed/sf_data_CLEAN.Rda")
-sf_data_select = sf_data_ALL #Select ALL outages or >=12 hrs (CLEAN)
+load(file = "Data/processed/sf_data_ALL_nototal.Rda")
 
 # Summarize events by counts (or total hours)
-df_data_EVENTS = sf_data_select %>%
+df_data_EVENTS = sf_data_ALL %>%
   st_set_geometry(NULL) %>%
   dplyr::select(-c(mean_cust_out:max_frac_cust_out, max_WIND10M:spi24)) %>% #strip out all dynamic factors 
   group_by(GEOID) %>% 
   #summarise(across(all_of(our_events), ~ sum(.x, na.rm = TRUE))) #total counts of each event
   summarise(across(all_of(our_events), ~ sum(.x * duration_hr, na.rm = TRUE))) #total hrs of each event
 
+# Data-frame of static predictors 
+load(file = "Data/processed/county_map_proj.Rda")
+county_map_area = county_map_proj %>%  
+  mutate(AREA = as.vector(st_area(county_map_proj))) %>% #sq-meters; as.vector removes units suffix 
+  mutate(DENSITY = POPULATION / AREA * 1000^2) %>% #population per sq-km 
+  dplyr::select(-c(AREA, NAME)) 
+load(file = "Data/processed/county_proj_nlcd.Rda")
+county_map_nlcd = county_map_nlcd %>%
+  dplyr::select(-c(NAME, POPULATION, ID, Other, Total)) %>%
+  st_set_geometry(NULL)
+load(file = "Data/processed/county_proj_dem.Rda")
+county_map_dem = county_proj_dem %>%
+  select(GEOID, DEM_mean, DEM_med, DEM_sd, DEM_min, DEM_max) %>%
+  st_set_geometry(NULL)
+load(file = "Data/processed/county_proj_rz.Rda")
+county_map_rz = county_map_rz %>%
+  select(GEOID, RZ_mean, RZ_med, RZ_mode) %>%
+  st_set_geometry(NULL)
+load(file = "Data/processed/county_proj_social.Rda") 
+county_map_social = county_proj_social %>%
+  dplyr::select(-NAME, -POPULATION) %>%
+  st_set_geometry(NULL)
+county_map_JOIN = county_map_area %>%
+  left_join(county_map_nlcd, by = c("GEOID")) %>%
+  left_join(county_map_dem, by = c("GEOID")) %>%
+  left_join(county_map_rz, by = c("GEOID")) %>%
+  left_join(county_map_social, by = c("GEOID"))
+
+clean_recipe = recipe(duration_hr ~ . , data = sf_pred) %>%
+  step_rm(contains("total")) %>% #remove total_ice and total_liquid 
+  step_impute_knn(all_predictors()) 
+
+
+
+
+
+
+
+
+
+
 # Summarize other variables by just taking first value (all the same)
-df_data_OTHER = sf_data_CLEAN %>%
+df_data_OTHER = sf_data_ALL %>%
   st_set_geometry(NULL) %>%
   dplyr::select(-duration_hr) %>%
   dplyr::select(-c(mean_cust_out:max_frac_cust_out, max_WIND10M:spi24)) %>% #strip out all dynamic factors 
@@ -68,7 +112,7 @@ df_data_CLEAN = df_data_EVENTS %>%
 
 # Split into training vs testing
 set.seed(23)
-df_split = initial_split(df_data_CLEAN, prop = 0.80, strata = "droughts")
+df_split = initial_split(df_data_CLEAN, prop = 0.80, strata = "hurricanes")
 df_train = training(df_split)
 df_test = testing(df_split)  
 df_cv = vfold_cv(df_train, v = 10, repeats = 1)
@@ -99,8 +143,12 @@ recipe_floods = recipe(floods ~ . , data = df_data_CLEAN) %>%
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe you want to use 
-recipe_mine = recipe_droughts
-y_test = df_test$droughts
+recipe_mine = recipe_hurricanes
+
+y_train = df_train %>% pull(hurricanes) %>% na.omit() 
+y_test = df_test %>% pull(hurricanes) %>% na.omit() 
+X_train = df_train %>% dplyr::select(-c(GEOID, POPULATION, all_of(our_events))) %>% na.omit()
+X_test = df_test %>% dplyr::select(-c(GEOID, POPULATION, all_of(our_events))) %>% na.omit()
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -134,10 +182,6 @@ lre_predictions = lre_fit %>% collect_predictions() #predictions for test sample
 
 rsq_lre = paste(lre_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_lre = paste(show_best(lre_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
-final_lre = lre_work %>%
-  finalize_workflow(lre_best) %>%
-  fit(df_data_CLEAN)
-print(tidy(final_lre), n = 150)
 
 ### XGBoost ####################################################################
 show_model_info("boost_tree")
@@ -219,7 +263,7 @@ plot_filtering_estimates2 <- function(df) {
                  bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * "," ~ RMSE[cv] ~ "=" ~ .(cverror_xgb) * ")")
       ),
       name = element_blank()) + 
-    ylab("Expected Outage Hours per Year (Droughts)") + 
+    ylab("Expected Outage Hours per Year (Hurricanes)") + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("County Index") +
     #ggtitle("County-Level Predictions: Test Sample\nNo 'Total' Variables") + 
@@ -253,6 +297,10 @@ plot_filtering_estimates2(gg)
 #https://christophm.github.io/interpretable-ml-book/ice.html
 #https://medium.com/dataman-in-ai/how-is-the-partial-dependent-plot-computed-8d2001a0e556
 #https://datascience.stackexchange.com/questions/15305/how-does-xgboost-learn-what-are-the-inputs-for-missing-values
+final_lre = lre_work %>%
+  finalize_workflow(lre_best) %>%
+  fit(df_data_CLEAN)
+print(tidy(final_lre), n = 150)
 
 final_model = xgb_work %>%
   finalize_workflow(xgb_best) %>%
@@ -364,10 +412,62 @@ gg3 = ggplot()+
   scale_fill_viridis_c(option="plasma", na.value = "grey50") +
   geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
   theme_dark() +
-  labs(title = "Expected Annual Power Outages \n-- Droughts --", fill = "Hours") +
+  labs(title = "Expected Annual Power Outages \n-- Hurricanes --", fill = "Hours") +
   theme(plot.title = element_text(hjust = 0.5),
         axis.title.x = element_blank(),
         axis.title.y = element_blank()
   )
 print(gg3)
 
+
+##########################################################################################################
+##### HURRICANE EXPOSURE  ################################################################################
+##########################################################################################################
+## https://cran.r-project.org/web/packages/hurricaneexposure/vignettes/hurricaneexposure.html
+county_list = sf_map$GEOID
+hurricane_exposure = county_wind(counties = c(county_list), start_year = 2015, end_year = 2019, wind_limit = 0.01)
+hurricane_summ = hurricane_exposure %>%
+  group_by(fips) %>%
+  summarize(AVG_WIND = mean(vmax_sust))
+hurricane_map = sf_map %>%
+  left_join(hurricane_summ, by = c("GEOID" = "fips"))
+
+gg3 = ggplot()+
+  geom_sf(data = hurricane_map, aes(fill = AVG_WIND), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+  geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
+  theme_dark() +
+  labs(title = "Hurricane Exposure \n2015 - 2019", fill = "Mean \nWind (m/s)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg3)
+
+cor(hurricane_map$AVG_WIND, hurricane_map$pred, use = "complete.obs")
+# 0.635
+
+## Hurricane deep dive
+county_zoom_list = c("FL", "GA", "AL", "SC", "NC")
+county_zoom = get_acs(geography = "county", state = county_zoom_list,
+                      variables=c("B01003_001"), year = 2019, geometry = TRUE, 
+                      cache_table = TRUE) %>%
+  mutate(POPULATION = estimate) %>%
+  dplyr::select(GEOID, NAME) %>%
+  st_transform(5070) 
+
+county_zoom_map = county_zoom %>%
+  inner_join((st_set_geometry(hurricane_map, NULL)), by = "GEOID") %>%
+  inner_join(df_join, by = "GEOID")
+
+gg4 = ggplot()+
+  geom_sf(data = county_zoom_map, aes(fill = QBLACK), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+  geom_sf(data = county_zoom_map, fill = NA, color = "black", lwd = 0.1) + 
+  theme_dark() +
+  labs(title = "Hurricane Exposure (2015 - 2019)", fill = "Mean \nWind (m/s)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg4)
