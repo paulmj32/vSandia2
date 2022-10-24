@@ -49,7 +49,7 @@ our_events = c(
 load(file = "Data/processed/sf_data_ALL_nototal.Rda")
 
 sf_data = sf_data_ALL %>%
-  dplyr::filter(hurricanes >= 1) %>% #filter to event of interest
+  dplyr::filter(droughts >= 1) %>% #filter to event of interest
   mutate(ln_hrs = log(duration_hr)) %>% 
   mutate(ln_cust = log(max_cust_out)) %>% 
   #mutate(pct_cust = max_frac_cust_out) %>%
@@ -80,19 +80,19 @@ recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, 
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe and responses you want to use 
-recipe_mine = recipe_pct
+recipe_mine = recipe_hrs
 
 ## Recipe - ln_hrs
-# y_train = df_train %>% pull(ln_hrs) %>% na.omit() 
-# y_test = df_test %>% pull(ln_hrs) %>% na.omit() 
-# X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
-# X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+y_train = df_train %>% pull(ln_hrs) %>% na.omit()
+y_test = df_test %>% pull(ln_hrs) %>% na.omit()
+X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
 
 ## Recipe - pct_cust
-y_train = df_train %>% na.omit() %>% pull(pct_cust)
-y_test = df_test %>% na.omit() %>% pull(pct_cust)
-X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+# y_train = df_train %>% na.omit() %>% pull(pct_cust)
+# y_test = df_test %>% na.omit() %>% pull(pct_cust)
+# X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+# X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -229,8 +229,10 @@ plot_filtering_estimates2 <- function(df) {
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("Index (County x Event)") +
-    ylab("Max Customers Out (ln - %)") + 
-    ggtitle("Hurricane Outages: Test Sample") + 
+    ylab("Hours (ln)") + 
+    ggtitle("Droughts Outage Duration: Test Sample") + 
+    #ylab("Max Customers Out (ln - %)") + 
+    #ggtitle("Hurricane Outages: Test Sample") + 
     # guides(
     #   color = guide_legend(order = 2),
     #   shape = guide_legend(order = 1),
