@@ -19,6 +19,8 @@ library(hurricaneexposure)
 library(spatialreg)
 library(gstat)
 library(ggpubr)
+library(grid)
+library(gridExtra)
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
@@ -74,26 +76,27 @@ df_preds = df_data %>% dplyr::select(-c(ln_hrs, ln_cust, pct_cust, GEOID))
 
 # Recipes for tidymodels 
 recipe_hrs = recipe(ln_hrs ~ . , data = df_data) %>% step_rm(ln_cust, pct_cust, GEOID) %>% step_naomit(ln_hrs)
-recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, GEOID) %>% step_naomit(pct_cust)
+recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, GEOID) %>% step_naomit(pct_cust) 
 
 ################################################################################
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe and responses you want to use 
-recipe_mine = recipe_hrs
+recipe_mine = recipe_pct
 
 ## Recipe - ln_hrs
-y_train = df_train %>% pull(ln_hrs) %>% na.omit()
-y_test = df_test %>% pull(ln_hrs) %>% na.omit()
-X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
-X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+# y_train = df_train %>% pull(ln_hrs) %>% na.omit()
+# y_test = df_test %>% pull(ln_hrs) %>% na.omit()
+# X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
+# X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
 
 ## Recipe - pct_cust
-# y_train = df_train %>% na.omit() %>% pull(pct_cust)
-# y_test = df_test %>% na.omit() %>% pull(pct_cust)
-# X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-# X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-
+y_train = df_train %>% na.omit() %>% pull(pct_cust)
+y_test = df_test %>% na.omit() %>% pull(pct_cust)
+X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+na_test = which(is.na(df_test$pct_cust))
+  
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
 show_model_info("linear_reg")
@@ -182,12 +185,21 @@ cverror_bart = format(round(bart_cv$rmse, 3), nsmall = 3)
 ##########################################################################################################
 ##### PLOTTING ###########################################################################################
 ##########################################################################################################
-gg = dplyr::tibble(actual = y_test, 
-                   eNet = as.vector(lre_predictions$.pred),
-                   bart = as.vector(bart_predictions),
-                   #rf = as.vector(rf_predictions$.pred),
-                   xgb = as.vector(xgb_predictions$.pred)
-)
+if (length(na_test) > 0) {
+  gg = dplyr::tibble(actual = y_test, 
+                     eNet = as.vector(lre_predictions$.pred)[-c(na_test)],
+                     bart = as.vector(bart_predictions),
+                     #rf = as.vector(rf_predictions$.pred),
+                     xgb = as.vector(xgb_predictions$.pred)[-c(na_test)]
+  )
+} else {
+  gg = dplyr::tibble(actual = y_test, 
+                     eNet = as.vector(lre_predictions$.pred),
+                     bart = as.vector(bart_predictions),
+                     #rf = as.vector(rf_predictions$.pred),
+                     xgb = as.vector(xgb_predictions$.pred)
+  )
+}
 gg = arrange(gg, actual)
 gg$index = seq.int(nrow(gg))
 gg_actual = gg %>% dplyr::select(index, actual)
@@ -229,10 +241,10 @@ plot_filtering_estimates2 <- function(df) {
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("Index (County x Event)") +
-    ylab("Hours (ln)") + 
-    ggtitle("Droughts Outage Duration: Test Sample") + 
-    #ylab("Max Customers Out (ln - %)") + 
-    #ggtitle("Hurricane Outages: Test Sample") + 
+    #ylab("Hours (ln)") + 
+    #ggtitle("WinterStorm Outage Duration: Test Sample") + 
+    ylab("Pct. Max Customers Out (ln)") + 
+    ggtitle("Hurricane Outage Impact: Test Sample") + 
     # guides(
     #   color = guide_legend(order = 2),
     #   shape = guide_legend(order = 1),
@@ -277,101 +289,155 @@ vip(final_obj, n = 20)
 
 bart_vimp = investigate_var_importance(bart_fit)
 
+
+df_imp = importance %>% 
+  mutate(cat = case_when(
+    Feature %in% c("delta_WIND10M", "delta_vapor", "delta_T10M", "delta_pressure", 
+                   "max_humidity_10M", "max_T10M", "max_WIND10M",
+                   "spi03", "spi06", "spi12", "spi24") ~ "Weather",
+    Feature %in% c("Barren", "Cultivated", "Forest", "Herbaceous", "Shrub", "Water", "Wetlands",
+                   "DEM_sd", "DEM_min", "RZ_med", "RZ_mode") ~ "Environment",
+    TRUE ~ "Socio-Economic"
+  )) %>%
+  mutate(Feature = case_when(Feature == "max_humidity_10M" ~ "max_humidity10M", TRUE ~ as.character(Feature))) %>% #name correction
+  dplyr::arrange(desc(Gain)) %>%
+  dplyr::slice(1:15) %>%
+  mutate(Feature1 = str_replace(Feature, "_", " ")) %>%
+  mutate(Feature2 = tolower(Feature1)) %>%
+  mutate(Feature_clean = str_to_title(Feature2)) %>%
+  dplyr::select(-c(Feature1, Feature2))
+
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+pp2 = ggplot() + 
+  theme_classic() + 
+  geom_col(data = df_imp, aes(x = Gain, y = fct_reorder(Feature_clean, Gain), fill = cat, color = cat), 
+          alpha = .75) +
+  scale_fill_manual(values = fill_vec) +
+  scale_color_manual(values = fill_vec) +
+  xlab("Importance") +
+  ylab(element_blank()) + 
+  ggtitle("Variable Importance (XGB): Hurricane Outage Duration") + 
+  labs(fill = "Variable Type", color = "Variable Type") +
+  guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
+  theme(
+        plot.title = element_text(hjust = 0.5),
+        legend.spacing.y = unit(0.33, "cm"),
+        legend.position = c(.8, .4)
+  )
+pp2
+
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################
 ##########################################################################################################
-X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-# pdp1 = pdp::partial(final_obj, pred.var = "Wetlands", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp2 = pdp::partial(final_obj, pred.var = "DEM_sd", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp3= pdp::partial(final_obj, pred.var = "DEM_min", ice = F, center = F,
-#                    plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                    train = X_train, type = "regression")
-# pdp4 = pdp::partial(final_obj, pred.var = "QMOHO", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp5 = pdp::partial(final_obj, pred.var = "GENDINC", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp6 = pdp::partial(final_obj, pred.var = "QBLACK", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp7 = pdp::partial(final_obj, pred.var = "PATTACHRES", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp8 = pdp::partial(final_obj, pred.var = "QHLTH65", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# 
-# grid.arrange(pdp1, pdp2, pdp3, pdp4, ncol = 2)
-# grid.arrange(pdp5, pdp6, pdp7, pdp8, ncol = 2)
+pdp1 = pdp::partial(final_obj, pred.var = "delta_WIND10M", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp1 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp1, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = delta_WIND10M), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Delta Wind10m")
+ggpdp1
 
+pdp2 = pdp::partial(final_obj, pred.var = "delta_vapor", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp2 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp2, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = delta_vapor), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Delta Vapor")
+ggpdp2
+
+pdp3 = pdp::partial(final_obj, pred.var = "delta_T10M", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp3 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp3, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = delta_T10M), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Delta T10m")
+ggpdp3
+
+pdp4 = pdp::partial(final_obj, pred.var = "delta_pressure", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp4 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp4, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = delta_pressure), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Delta Pressure")
+ggpdp4
+
+grid.arrange(ggpdp1, ggpdp2, ggpdp3, ggpdp4, ncol = 2,
+             top = textGrob("Partial Dependence Plots"))
 
 ##########################################################################################################
 ##### CREATE MAPS  #######################################################################################
 ##########################################################################################################
-# Base county map 
-load(file = "Data/processed/county_map_proj.Rda")
-
-# Hurricane exposure
-hurricane_exposure = county_wind(counties = as.vector(county_map_proj$GEOID), 
-                                 start_year = 2015, end_year = 2019, wind_limit = 17.4)
-hurricane_group = hurricane_exposure %>%
-  group_by(fips) %>%
-  summarize(avg_sust_spd = mean(vmax_sust), avg_gust_spd = mean(vmax_gust), sum_sust_hrs = sum(sust_dur) / 60, sum_gust_hrs = sum(gust_dur) / 60)
-
-# Annual outage hours - all US
-hrs = df_data %>%
-  dplyr::select(GEOID, ln_hrs) %>%
-  mutate(hrs = exp(ln_hrs)) %>%
-  group_by(GEOID) %>%
-  summarise(Hours = sum(hrs))
-hr_map = county_map_proj %>%
-  left_join(hrs, by = c("GEOID")) %>%
-  left_join(hurricane_group, by = c("GEOID" = "fips"))
-
-gg3 = ggplot()+
-  geom_sf(data = hr_map, aes(fill = Hours), color = NA) +
-  #geom_sf(data = hr_map, aes(fill = sum_sust_hrs), color = NA) +
-  scale_fill_viridis_c(option="plasma", na.value = "grey30") +
-  geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
-  theme_dark() +
-  labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
-  #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank()
-  )
-print(gg3)
-
-# Annual outage hours - zoom 
-county_zoom_list = c("TX", "LA", "MS", "AL", "FL", "GA", "SC", "NC", "VA")
-county_zoom = get_acs(geography = "county", state = county_zoom_list,
-                      variables=c("B01003_001"), year = 2019, geometry = TRUE, 
-                      cache_table = TRUE) %>%
-  mutate(POPULATION = estimate) %>%
-  dplyr::select(GEOID, NAME) %>%
-  st_transform(5070) 
-hr_zoom = county_zoom %>%
-  left_join(hrs, by = c("GEOID")) %>%
-  left_join(hurricane_group, by = c("GEOID" = "fips"))
-
-gg3 = ggplot()+
-  geom_sf(data = hr_zoom, aes(fill = Hours), color = NA) +
-  #geom_sf(data = hr_zoom, aes(fill = sum_sust_hrs), color = NA) +
-  scale_fill_viridis_c(option="plasma", na.value = "grey30") +
-  geom_sf(data = county_zoom, fill = NA, color = "black", lwd = 0.1) + 
-  theme_dark() +
-  labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
-  #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank()
-  )
-print(gg3)
+# # Base county map 
+# load(file = "Data/processed/county_map_proj.Rda")
+# 
+# # Hurricane exposure
+# hurricane_exposure = county_wind(counties = as.vector(county_map_proj$GEOID), 
+#                                  start_year = 2015, end_year = 2019, wind_limit = 17.4)
+# hurricane_group = hurricane_exposure %>%
+#   group_by(fips) %>%
+#   summarize(avg_sust_spd = mean(vmax_sust), avg_gust_spd = mean(vmax_gust), sum_sust_hrs = sum(sust_dur) / 60, sum_gust_hrs = sum(gust_dur) / 60)
+# 
+# # Annual outage hours - all US
+# hrs = df_data %>%
+#   dplyr::select(GEOID, ln_hrs) %>%
+#   mutate(hrs = exp(ln_hrs)) %>%
+#   group_by(GEOID) %>%
+#   summarise(Hours = sum(hrs))
+# hr_map = county_map_proj %>%
+#   left_join(hrs, by = c("GEOID")) %>%
+#   left_join(hurricane_group, by = c("GEOID" = "fips"))
+# 
+# gg3 = ggplot()+
+#   geom_sf(data = hr_map, aes(fill = Hours), color = NA) +
+#   #geom_sf(data = hr_map, aes(fill = sum_sust_hrs), color = NA) +
+#   scale_fill_viridis_c(option="plasma", na.value = "grey30") +
+#   geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
+#   theme_dark() +
+#   labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
+#   #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
+#   theme(plot.title = element_text(hjust = 0.5),
+#         axis.title.x = element_blank(),
+#         axis.title.y = element_blank()
+#   )
+# print(gg3)
+# 
+# # Annual outage hours - zoom 
+# county_zoom_list = c("TX", "LA", "MS", "AL", "FL", "GA", "SC", "NC", "VA")
+# county_zoom = get_acs(geography = "county", state = county_zoom_list,
+#                       variables=c("B01003_001"), year = 2019, geometry = TRUE, 
+#                       cache_table = TRUE) %>%
+#   mutate(POPULATION = estimate) %>%
+#   dplyr::select(GEOID, NAME) %>%
+#   st_transform(5070) 
+# hr_zoom = county_zoom %>%
+#   left_join(hrs, by = c("GEOID")) %>%
+#   left_join(hurricane_group, by = c("GEOID" = "fips"))
+# 
+# gg3 = ggplot()+
+#   geom_sf(data = hr_zoom, aes(fill = Hours), color = NA) +
+#   #geom_sf(data = hr_zoom, aes(fill = sum_sust_hrs), color = NA) +
+#   scale_fill_viridis_c(option="plasma", na.value = "grey30") +
+#   geom_sf(data = county_zoom, fill = NA, color = "black", lwd = 0.1) + 
+#   theme_dark() +
+#   labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
+#   #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
+#   theme(plot.title = element_text(hjust = 0.5),
+#         axis.title.x = element_blank(),
+#         axis.title.y = element_blank()
+#   )
+# print(gg3)
 
 
 ##########################################################################################################

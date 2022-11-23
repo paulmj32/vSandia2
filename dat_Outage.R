@@ -29,6 +29,7 @@ dbpath = "./Data/Outages/AGM_summary_CONUS_panel_Proc03Aug2022.sqlite"
 mydb = RSQLite::dbConnect(drv = RSQLite::SQLite(), 
                           dbname = dbpath)
 tables = dbListTables(mydb) #see tables
+#myquery = dbGetQuery(mydb, 'SELECT * FROM summary LIMIT 10')
 myquery = dbGetQuery(mydb, 'SELECT * FROM summary')
 dbDisconnect(mydb)
 

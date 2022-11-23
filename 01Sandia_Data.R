@@ -156,12 +156,24 @@ sf_pred_CLEAN = prep(clean_recipe) %>% juice()
 # corrplot(asd2, type = "full")
 
 # Data set with cleaned predictors and ALL events
-sf_data_ALL = sf_data %>% 
+sf_data_ALL_nototal = sf_data %>% 
   dplyr::select(c(GEOID, POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out)) %>%
   bind_cols(sf_pred_CLEAN)
-#save(sf_data_ALL, file = "Data/processed/sf_data_ALL_nototal.Rda")
+#save(sf_data_ALL_nototal, file = "Data/processed/sf_data_ALL_nototal.Rda")
 
 # # Filter data to large events 
 # sf_data_CLEAN = sf_data_ALL %>%
 #   dplyr::filter(duration_hr >= 12) #>12 hrs (~95% quantile)
 # #save(sf_data_CLEAN, file = "Data/processed/sf_data_CLEAN.Rda")
+
+# gg2 = ggplot(county_map_JOIN)+
+#   geom_sf(aes(fill = RZ_mean), color = NA) +
+#   scale_fill_viridis_c(option="plasma", na.value = "grey50") +
+#   #geom_sf(fill = NA, show.legend = F, color = "black", lwd = 0.005)+
+#   #coord_sf(datum = NA) + #removes gridlines
+#   #guides(fill = "none") + #removes legend
+#   theme_minimal()  #removes background
+# pdf("Figures/figure_rz.pdf", width = 7.48, height = 4.5)
+# gg2
+# dev.off()
+
