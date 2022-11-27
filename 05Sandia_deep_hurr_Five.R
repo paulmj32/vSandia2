@@ -247,7 +247,7 @@ plot_filtering_estimates2 <- function(df) {
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
     xlab("Index (County x Event)") +
-    ylab("Max Customers Out (ln - %)") + 
+    ylab("Hours (ln)") + 
     ggtitle("Hurricane Outage Duration: Test Sample\n -- Five Factors --") + 
     # guides(
     #   color = guide_legend(order = 2),
@@ -292,6 +292,44 @@ head(importance, n = 20)
 vip(final_obj, n = 20)
 
 bart_vimp = investigate_var_importance(bart_fit)
+
+
+df_imp = importance %>% 
+  mutate(cat = case_when(
+    Feature %in% c("delta_WIND10M", "delta_vapor", "delta_T10M", "delta_pressure", 
+                   "max_humidity_10M", "max_T10M", "max_WIND10M",
+                   "spi03", "spi06", "spi12", "spi24") ~ "Weather",
+    Feature %in% c("Barren", "Cultivated", "Forest", "Herbaceous", "Shrub", "Water", "Wetlands",
+                   "DEM_sd", "DEM_min", "RZ_med", "RZ_mode") ~ "Environment",
+    TRUE ~ "Socio-Economic"
+  )) %>%
+  mutate(Feature = case_when(Feature == "max_humidity_10M" ~ "max_humidity10M", TRUE ~ as.character(Feature))) %>% #name correction
+  dplyr::arrange(desc(Gain)) %>%
+  dplyr::slice(1:20) %>%
+  mutate(Feature1 = str_replace(Feature, "_", " ")) %>%
+  mutate(Feature2 = tolower(Feature1)) %>%
+  mutate(Feature_clean = str_to_title(Feature2)) %>%
+  dplyr::select(-c(Feature1, Feature2))
+
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+pp2 = ggplot() + 
+  theme_classic() + 
+  geom_col(data = df_imp, aes(x = Gain, y = fct_reorder(Feature_clean, Gain), fill = cat, color = cat), 
+           alpha = .75) +
+  scale_fill_manual(values = fill_vec) +
+  scale_color_manual(values = fill_vec) +
+  xlab("Importance") +
+  ylab(element_blank()) + 
+  ggtitle("Variable Importance (XGB): Hurricane Outage Duration \n-- Five Factors --") + 
+  labs(fill = "Variable Type", color = "Variable Type") +
+  guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.spacing.y = unit(0.33, "cm"),
+    legend.position = c(.8, .4)
+  )
+pp2
+
 
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################

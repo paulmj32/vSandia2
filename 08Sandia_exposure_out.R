@@ -1,4 +1,3 @@
-#### Machine learning 
 options(java.parameters = "-Xmx10g")
 library(bartMachine)
 library(tidyverse)
@@ -290,21 +289,25 @@ county_hrs = county_map_proj %>%
   left_join(hrs, by = c("GEOID"))
 
 # # Annual outage hours - zoom 
-# county_zoom_list = c("TX", "LA", "MS", "AL", "FL", "GA", "SC", "NC", "VA")
-# county_zoom = get_acs(geography = "county", state = county_zoom_list,
-#                       variables=c("B01003_001"), year = 2019, geometry = TRUE, 
-#                       cache_table = TRUE) %>%
-#   mutate(POPULATION = estimate) %>%
-#   dplyr::select(GEOID, NAME) %>%
-#   st_transform(5070) 
+county_zoom_list = c("TX", "LA", "MS", "AL", "FL", "GA", "SC", "NC", "VA")
+county_zoom = get_acs(geography = "county", state = county_zoom_list,
+                      variables=c("B01003_001"), year = 2019, geometry = TRUE,
+                      cache_table = TRUE) %>%
+  mutate(POPULATION = estimate) %>%
+  dplyr::select(GEOID, NAME) %>%
+  st_transform(5070)
 # hr_zoom = county_zoom %>%
 #   left_join(hrs, by = c("GEOID")) %>%
 #   left_join(hurricane_group, by = c("GEOID" = "fips"))
+geoid_zoom = county_zoom$GEOID
+county_hrs_zoom = county_hrs %>%
+  dplyr::filter(GEOID %in% geoid_zoom)
 
+county_plot = county_hrs
 gg3 = ggplot()+
-  geom_sf(data = county_hrs, aes(fill = Hours), color = NA) +
+  geom_sf(data = county_plot, aes(fill = Hours), color = NA) +
   scale_fill_viridis_c(option="plasma", na.value = "grey30") +
-  geom_sf(data = county_hrs, fill = NA, color = "black", lwd = 0.1) + 
+  geom_sf(data = county_plot, fill = NA, color = "black", lwd = 0.1) + 
   theme_dark() +
   labs(title = paste("Annual Power Outages Due to ", str_to_title(gsub("_", " ", my_event)), " (2015 - 2019)", sep = ""), fill = "Hours") +
   #labs(title = expression(atop("Annual Power Outages", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +

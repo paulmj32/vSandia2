@@ -301,7 +301,7 @@ df_imp = importance %>%
   )) %>%
   mutate(Feature = case_when(Feature == "max_humidity_10M" ~ "max_humidity10M", TRUE ~ as.character(Feature))) %>% #name correction
   dplyr::arrange(desc(Gain)) %>%
-  dplyr::slice(1:15) %>%
+  dplyr::slice(1:20) %>%
   mutate(Feature1 = str_replace(Feature, "_", " ")) %>%
   mutate(Feature2 = tolower(Feature1)) %>%
   mutate(Feature_clean = str_to_title(Feature2)) %>%

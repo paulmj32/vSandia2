@@ -281,6 +281,9 @@ hr_zoom = county_zoom %>%
   left_join(hrs, by = c("GEOID")) %>%
   left_join(hurricane_group, by = c("GEOID" = "fips"))
 
+hr_all = county_map_proj %>%
+  left_join(hurricane_group, by = c("GEOID" = "fips"))
+
 gg3 = ggplot()+
   #geom_sf(data = hr_zoom, aes(fill = Hours), color = NA) +
   geom_sf(data = hr_zoom, aes(fill = sum_sust_hrs / 5), color = NA) +
@@ -290,7 +293,9 @@ gg3 = ggplot()+
   #labs(title = "Annual Power Outages\nTropical Storms (2015 - 2019)", fill = "Hours") +
   #labs(title = "Annual Exposure to Sustained Winds \u2265 34 knots\nTropical Storms (2015 - 2019)", fill = "Hours") +
   #labs(title = expression(atop("Annual Power Outages", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
-  labs(title = expression(atop("Annual Exposure to Sustained"~Winds>=34~"knots", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
+  #labs(title = expression(atop("Annual Exposure to Sustained"~Winds>=34~"knots", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
+  #labs(title = expression("Annual Exposure to Sustained"~Winds>=34~"knots (2015 - 2019)"), fill = "Hours") +
+  labs(title = expression("Annual Exposure to Hurricane Winds (2015 - 2019)"), fill = "Hours") +
   theme(plot.title = element_text(hjust = 0.5),
         axis.title.x = element_blank(),
         axis.title.y = element_blank()
