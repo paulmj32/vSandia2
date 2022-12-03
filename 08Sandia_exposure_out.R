@@ -18,6 +18,7 @@ library(hurricaneexposure)
 library(spatialreg)
 library(gstat)
 library(ggpubr)
+library(cowplot)
 
 my_event = "hurricanes"
 
@@ -309,7 +310,7 @@ gg3 = ggplot()+
   scale_fill_viridis_c(option="plasma", na.value = "grey30") +
   geom_sf(data = county_plot, fill = NA, color = "black", lwd = 0.1) + 
   theme_dark() +
-  labs(title = paste("Annual Power Outages Due to ", str_to_title(gsub("_", " ", my_event)), " (2015 - 2019)", sep = ""), fill = "Hours") +
+  labs(title = paste("Annual ", str_remove(str_to_title(gsub("_", " ", my_event)), "s"), " Outages (2015 - 2019)", sep = ""), fill = "Hours") +
   #labs(title = expression(atop("Annual Power Outages", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
   #labs(title = expression(atop("Annual Exposure to Sustained"~Winds>=34~"knots", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
   theme(plot.title = element_text(hjust = 0.5),
@@ -318,6 +319,59 @@ gg3 = ggplot()+
   )
 print(gg3)
 
+########################################################################################################
+### FIGURES FOR PUBLICATION
+########################################################################################################
+pdf_x = 8.5 #sra 8.5 x 3.65 in
+pdf_y = 3.65
 
+#Figure model accuracy
+gg_acc = p = ggplot() + 
+  theme_classic() + 
+  geom_hline(yintercept = mean(gg$actual, na.rm = T), linetype="dashed", color = "gray50", alpha = 0.85) +
+  geom_line(data = gg_all, aes(x = index, y = ypred, color = Model, lty = Model, alpha = Model)) +
+  scale_color_manual(
+    values = color_vec, 
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre)  * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) +
+  scale_linetype_manual(
+    values = lty_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")         
+    ),
+    name = element_blank()) + 
+  scale_alpha_manual(
+    values = alpha_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) + 
+  scale_y_continuous(labels = function(x) paste0(x)) +
+  xlab("County") +
+  ylab("Hours (ln)") + 
+  ggtitle(paste("Annual ", str_remove(str_to_title(gsub("_", " ", my_event)),"s"), " Outages : Test Sample", sep = "")) +
+  # guides(
+  #   color = guide_legend(order = 2),
+  #   shape = guide_legend(order = 1),
+  #   linetype = guide_legend(order = 2)
+  # ) + 
+  theme(legend.spacing.y = unit(-0.25, "cm"),
+        legend.direction = "vertical",
+        legend.box = "vertical",
+        legend.position = c(.8, .25),
+        plot.title = element_text(hjust = 0.5)
+  )
 
+cow_out = cowplot::plot_grid(gg3, gg_acc, ncol = 2, scale = 0.95)
+pdf("Figures/Publish/outages.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_out
+dev.off()
 

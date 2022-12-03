@@ -21,6 +21,7 @@ library(gstat)
 library(ggpubr)
 library(grid)
 library(gridExtra)
+library(cowplot)
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
@@ -261,6 +262,7 @@ plot_filtering_estimates2 <- function(df) {
 }
 plot_filtering_estimates2(gg)
 
+
 ##########################################################################################################
 ##### VARIABLE IMPORTANCE - FINAL MODEL ##################################################################
 ##########################################################################################################
@@ -316,7 +318,7 @@ pp2 = ggplot() +
   scale_color_manual(values = fill_vec) +
   xlab("Importance") +
   ylab(element_blank()) + 
-  ggtitle("Variable Importance (XGB): Hurricane Outage Duration") + 
+  ggtitle("Variable Importance: Hurricane Outage Duration") + 
   labs(fill = "Variable Type", color = "Variable Type") +
   guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
   theme(
@@ -452,11 +454,28 @@ res = res_xgb
 # http://www.sthda.com/english/wiki/normality-test-in-r
 qqnorm(res)
 qqline(res)
-shapiro.test(res)
+res_shap= shapiro.test(res)
+gg_norm = ggpubr::ggqqplot(res, color = '#00AFBB') +
+  labs(title = "Normal Q-Q Plot") +
+    theme(plot.title = element_text(hjust = 0.5)
+          ) +
+  annotate("text", x = -1.5, y = 0.6, label = paste("Shapiro-Wilk: ", format(round(res_shap$p.value, 3), nsmall = 3), sep = ""), color = '#00AFBB')
+gg_norm
 
 # Heteroskedacity of residuals
 fitted = as.vector(xgb_predictions$.pred) 
 plot(fitted, res_xgb)
+gg_hetero_data = data.frame(fitted, res)
+gg_hetero = ggplot(gg_hetero_data) +
+  theme_classic() +
+  geom_point(aes(x = fitted, y = res), color = "#E7B800") +
+  geom_hline(yintercept = 0, linetype="dashed", color = "#E7B800", alpha = 0.85) +
+  xlab("Fitted") +
+  ylab("Residuals") +
+  labs(title = "Residuals vs. Fitted") +
+  theme(plot.title = element_text(hjust = 0.5)
+  ) 
+gg_hetero  
 
 bart_assmp = check_bart_error_assumptions(bart_fit)
 
@@ -479,6 +498,125 @@ county_lonlat_sp = as_Spatial(county_lonlat)
 vgram = variogram(Z~1, county_lonlat_sp)
 plot(vgram)
 
+gg_vgram_data = data.frame(Distance = vgram$dist / 1000, Gamma = vgram$gamma) #distance from m to km
+gg_vgram = ggplot(gg_vgram_data, aes(x = Distance, y = Gamma)) +
+  geom_line(linetype = "dashed", color = "#FC4E07") + 
+  geom_point(color = "#FC4E07") +
+  theme_classic() +
+  xlab("Distance (km)") + 
+  ylim(0, round(1.1* max(vgram$gamma), 2))+
+  labs(title = "Variogram of Residuals") +
+  theme(plot.title = element_text(hjust = 0.5)
+  ) 
+gg_vgram  
 
 
+########################################################################################################
+### FIGURES FOR PUBLICATION
+########################################################################################################
+pdf_x = 8.5 #sra 8.5 x 3.65 in
+pdf_y = 3.65
 
+#Figure model accuracy
+gg_acc = ggplot() + 
+  theme_classic() + 
+  geom_hline(yintercept = mean(gg$actual, na.rm = T), linetype="dashed", color = "gray50", alpha = 0.85) +
+  geom_line(data = gg_all, aes(x = index, y = ypred, color = Model, lty = Model, alpha = Model)) +
+  scale_color_manual(
+    values = color_vec, 
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) +
+  scale_linetype_manual(
+    values = lty_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")         
+    ),
+    name = element_blank()) + 
+  scale_alpha_manual(
+    values = alpha_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) + 
+  scale_y_continuous(labels = function(x) paste0(x)) +
+  xlab("Index (County x Event)") +
+  ylab("Hours (ln)") + 
+  ggtitle("Hurricane Outage Duration: Test Sample") + 
+  #ylab("Pct. Max Customers Out (ln)") + 
+  #ggtitle("Hurricane Outage Impact: Test Sample") + 
+  # guides(
+  #   color = guide_legend(order = 2),
+  #   shape = guide_legend(order = 1),
+  #   linetype = guide_legend(order = 2)
+  # ) + 
+  theme(legend.spacing.y = unit(-0.25, "cm"),
+        legend.direction = "vertical",
+        legend.box = "vertical",
+        legend.position = c(.225, .8),
+        plot.title = element_text(hjust = 0.5)
+  )
+gg_acc
+#gg_acc_pct = gg_acc
+#save(gg_acc_pct, file = "Figures/Publish/gg_acc_pct.Rda")
+load("Figures/Publish/gg_acc_pct.Rda")
+cow_acc = cowplot::plot_grid(gg_acc, gg_acc_pct, ncol = 2, scale = 0.95)
+cow_acc
+pdf("Figures/Publish/test.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_acc
+dev.off()
+
+#Figure model assumptions
+cow_asmp1 = cowplot::plot_grid(gg_norm, gg_hetero, nrow = 2)
+cow_asmp = cowplot::plot_grid(cow_asmp1, gg_vgram, ncol = 2, rel_widths = c(3,2), scale = 0.95)
+cow_asmp
+dev.off()
+pdf("Figures/Publish/assumptions.pdf", width = pdf_x, height = pdf_y) #SRA ppt 8.5 x 3.65
+cow_asmp
+dev.off()
+
+#Figure variable importance 
+df_vv = df_imp %>%
+  dplyr::slice(1:20)
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+vv2 = ggplot() + 
+  theme_classic() + 
+  geom_col(data = df_vv, aes(x = Gain, y = fct_reorder(Feature_clean, Gain), fill = cat, color = cat), 
+           alpha = .75) +
+  scale_fill_manual(values = fill_vec) +
+  scale_color_manual(values = fill_vec) +
+  xlab("Variable Importance") +
+  ylab(element_blank()) + 
+  ggtitle("Hurricane Outage Duration") + 
+  labs(fill = "Variable Type", color = "Variable Type") +
+  guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.spacing.y = unit(0.33, "cm"),
+    legend.position = c(.8, .4)
+  )
+vv2
+#vv2_pct = vv2
+#save(vv2_pct, file = "Figures/Publish/vv2_pct.Rda")
+load("Figures/Publish/vv2_pct.Rda")
+cow_vimp = cowplot::plot_grid(vv2, vv2_pct, ncol = 2, scale = 0.95)
+cow_vimp
+pdf("Figures/Publish/vimp.pdf", width = pdf_x, height = pdf_y) #SRA ppt 8.5 x 3.65
+cow_vimp
+dev.off()
+
+## Figure Five factors
+ff1 = gg_acc + ggtitle("Hurricane Outage Duration: Test Sample\n--Five Factors--")
+ff2 = vv2 + ggtitle("Hurricane Outage Duration\n--Five Factors--")
+cow_ff = cowplot::plot_grid(ff1, ff2, ncol = 2, scale = 0.95)
+cow_ff
+pdf("Figures/Publish/five.pdf", width = pdf_x, height = pdf_y) #SRA ppt 8.5 x 3.65
+cow_ff
+dev.off()

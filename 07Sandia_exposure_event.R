@@ -22,6 +22,7 @@ library(DBI)
 library(lubridate)
 library(grid)
 library(gridExtra)
+library(cowplot)
 
 my_event = "hurricanes"
 
@@ -372,7 +373,7 @@ gg3 = ggplot()+
   scale_fill_viridis_c(option="plasma", na.value = "grey30") +
   geom_sf(data = county_plot, fill = NA, color = "black", lwd = 0.1) + 
   theme_dark() +
-  labs(title = paste("Annual Exposure to ", str_to_title(gsub("_", " ", my_event)), " (2015 - 2019)", sep = ""), fill = "Hours") +
+  labs(title = paste("Annual ", str_remove(str_to_title(gsub("_", " ", my_event)),"s"), " Exposure (2015 - 2019)", sep = ""), fill = "Hours") +
   #labs(title = expression(atop("Annual Power Outages", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
   #labs(title = expression(atop("Annual Exposure to Sustained"~Winds>=34~"knots", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
   theme(plot.title = element_text(hjust = 0.5),
@@ -381,11 +382,14 @@ gg3 = ggplot()+
   )
 print(gg3)
 
-
-
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################
 ##########################################################################################################
+pdp = pdp::partial(final_obj, pred.var = "QHLTH", ice = F, center = F,
+                   plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                   train = X_train, type = "regression")
+pdp
+
 pdp1 = pdp::partial(final_obj, pred.var = "Forest", ice = F, center = F,
                     plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression") %>%
@@ -411,11 +415,11 @@ ggpdp2
 pdp3 = pdp::partial(final_obj, pred.var = "PROXMET", ice = F, center = F,
                     plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
                     train = X_train, type = "regression") %>%
-  rename(IV = 1)
+  rename(IV = 1) 
 ggpdp3 = ggplot() +
   theme_gray() +
-  geom_line(data = pdp3, aes(x = IV, y = yhat)) +
-  geom_rug(data = X_train, aes(x = PROXMET), sides = "b", alpha = 0.33, color = "black") +
+  geom_line(data = pdp3, aes(x = IV / 1000, y = yhat)) +
+  geom_rug(data = X_train, aes(x = PROXMET / 1000), sides = "b", alpha = 0.33, color = "black") +
   xlab("Proxmet")
 ggpdp3
 
@@ -441,5 +445,114 @@ ggpdp5 = ggplot() +
   xlab("Qhlth65")
 ggpdp5
 
-grid.arrange(ggpdp1, ggpdp2, ggpdp3, ggpdp4, ncol = 2,
-             top = textGrob("Partial Dependence Plots"))
+pdp6 = pdp::partial(final_obj, pred.var = "CROPINS", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp6 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp6, aes(x = IV * 100, y = yhat)) +
+  geom_rug(data = X_train, aes(x = CROPINS * 100), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Cropins") 
+ggpdp6
+
+pdp7 = pdp::partial(final_obj, pred.var = "GENDINC", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp7 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp7, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = GENDINC), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Gendinc")
+ggpdp7
+
+ggpdps=grid.arrange(ggpdp3, ggpdp4, ggpdp5, ggpdp6, ncol = 2,
+             top = textGrob("Partial Dependence Plots: Socio-Economic"))
+
+
+
+########################################################################################################
+### FIGURES FOR PUBLICATION
+########################################################################################################
+pdf_x = 8.5 #sra 8.5 x 3.65 in
+pdf_y = 3.65
+
+#Figure model accuracy
+gg_acc = p = ggplot() + 
+  theme_classic() + 
+  geom_hline(yintercept = mean(gg$actual, na.rm = T), linetype="dashed", color = "gray50", alpha = 0.85) +
+  geom_line(data = gg_all, aes(x = index, y = ypred, color = Model, lty = Model, alpha = Model)) +
+  scale_color_manual(
+    values = color_vec, 
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre)  * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) +
+  scale_linetype_manual(
+    values = lty_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")         
+    ),
+    name = element_blank()) + 
+  scale_alpha_manual(
+    values = alpha_vec,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
+               bquote("eNET (" * R^2 ~ "=" ~ .(rsq_lre) * ")"), 
+               bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) + 
+  scale_y_continuous(labels = function(x) paste0(x)) +
+  xlab("County") +
+  ylab("Hours (ln)") + 
+  ggtitle(paste("Annual ", str_remove(str_to_title(gsub("_", " ", my_event)), "s"), " Exposure: Test Sample", sep = "")) +
+  # guides(
+  #   color = guide_legend(order = 2),
+  #   shape = guide_legend(order = 1),
+  #   linetype = guide_legend(order = 2)
+  # ) + 
+  theme(legend.spacing.y = unit(-0.25, "cm"),
+        legend.direction = "vertical",
+        legend.box = "vertical",
+        legend.position = c(.8, .25),
+        plot.title = element_text(hjust = 0.5)
+  )
+
+cow_haz = cowplot::plot_grid(gg3, gg_acc, ncol = 2, scale = 0.95)
+pdf("Figures/Publish/hazard.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_haz
+dev.off()
+
+# Figure Variable importance and PDPs
+df_vv = df_imp %>%
+  dplyr::slice(1:20) 
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+vv2 = ggplot() + 
+  theme_classic() + 
+  geom_col(data = df_vv, aes(x = Gain, y = fct_reorder(Feature_clean, Gain), fill = cat, color = cat), 
+           alpha = .75) +
+  scale_fill_manual(values = fill_vec) +
+  scale_color_manual(values = fill_vec) +
+  xlab("Variable Importance") +
+  ylab(element_blank()) + 
+  ggtitle("Hurricane Exposure") + 
+  labs(fill = "Variable Type", color = "Variable Type") +
+  guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.spacing.y = unit(0.33, "cm"),
+    legend.position = c(.8, .4)
+  )
+vv2
+
+cow_pdps = cowplot::plot_grid(vv2, ggpdps, ncol = 2, scale = 0.95)
+cow_pdps
+pdf("Figures/Publish/pdps.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_pdps
+dev.off()
+
