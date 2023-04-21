@@ -1,4 +1,3 @@
-#### Machine learning 
 options(java.parameters = "-Xmx10g")
 library(bartMachine)
 library(tidyverse)
@@ -19,7 +18,13 @@ library(hurricaneexposure)
 library(spatialreg)
 library(gstat)
 library(ggpubr)
+library(DBI)
+library(lubridate)
+library(grid)
+library(gridExtra)
 library(cowplot)
+
+my_event = "hurricanes"
 
 ################################################################################
 #### PRE-PROCESSING ############################################################
@@ -48,70 +53,101 @@ our_events = c(
 
 # Load data and select final DVs 
 load(file = "Data/processed/sf_data_ALL_nototal.Rda")
-
-sf_data = sf_data_ALL %>%
-  dplyr::filter(hurricanes >= 1) %>% #filter to event of interest
-  mutate(ln_hrs = log(duration_hr)) %>% 
-  mutate(ln_cust = log(max_cust_out)) %>% 
-  #mutate(pct_cust = max_frac_cust_out) %>%
-  mutate(pct_cust = log(max_frac_cust_out)) %>%
-  dplyr::select(-c(POPULATION, mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out, 
-                   duration_hr, all_of(our_events), avalanche)) %>%
-  relocate(c(ln_hrs, ln_cust, pct_cust))
-
+df_data1 = sf_data_ALL %>%
+  dplyr::select(-c(POPULATION,
+                   mean_cust_out, mean_frac_cust_out, max_cust_out, max_frac_cust_out, 
+                   duration_hr,
+                   avalanche, #erroneous
+                   all_of(our_events),
+                   max_WIND10M:spi24
+                   )) %>%
+  st_set_geometry(NULL) %>%
+  group_by(GEOID) %>%
+  summarise(across(everything(), mean))
 rm(list=c("sf_data_ALL")) 
 gc() 
 
-# Five Factors
-load(file = "Data/processed/county_proj_scores.Rda")
-county_proj_scores = county_scores %>%
-  st_set_geometry(NULL) %>%
-  dplyr::select(c(GEOID, Factor1:Factor5))
+## Get SQL data for NOAA event hours
+# https://stackoverflow.com/questions/9802680/importing-files-with-extension-sqlite-into-r
+# https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
+# https://www.r-bloggers.com/2018/11/quick-guide-r-sqlite/
+# my_statement = 'SELECT fips_code, SUM(droughts), SUM(extreme_cold), SUM(extreme_heat), SUM(floods), SUM(hails), SUM(high_winds), SUM(hurricanes), SUM(tornadoes), SUM(wildfires), SUM(winter_storms), SUM(avalanche), SUM(blizzard), SUM(coastal_flood), SUM(cold_wind_chill), SUM(dense_smoke), SUM(drought), SUM(excessive_heat), SUM(extreme_cold_wind_chill), SUM(flash_flood), SUM(flood), SUM(frost_freeze), SUM(funnel_cloud), SUM(hail), SUM(heat), SUM(heavy_rain), SUM(heavy_snow), SUM(high_wind), SUM(hurricane), SUM(hurricane_typhoon), SUM(ice_storm), SUM(lake_effect_snow), SUM(lakeshore_flood), SUM(sleet), SUM(strong_wind), SUM(tornado), SUM(tropical_depression), SUM(tropical_storm), SUM(wildfire), SUM(winter_storm), SUM(winter_weather) FROM noaa GROUP BY fips_code'
+# dbpath = '/Users/paul/vSandia2/Data/Outages/AGM_noaa_CONUS_panel_Proc03Aug2022.sqlite'
+# mydb = RSQLite::dbConnect(drv = RSQLite::SQLite(), dbname = dbpath)
+# tables = dbListTables(mydb) #see tables
+# myquery_10 = dbGetQuery(mydb, 'SELECT * FROM noaa LIMIT 10')
+# #myquery = dbGetQuery(mydb, statement = my_statement)
+# dbDisconnect(mydb)
+# 
+# #save(myquery, file = "Data/processed/myquery_hazards.Rda")
+# load(file = "Data/processed/myquery_hazards.Rda")
+# columns = colnames(myquery_10[,3:ncol(myquery_10)])
+# df_hazards = myquery
+# colnames(df_hazards) = c("GEOID", columns)
+# df_hazards_long = df_hazards %>%
+#   gather(key = "hazard", value = "minutes", -GEOID) %>%
+#   mutate(hours = minutes / 60)
+# df_hazards_clean = df_hazards_long %>%
+#   mutate(hazard2 = case_when(
+#     hazard %in% c('drought') ~ "droughts",
+#     hazard %in% c('cold_wind_chill', 'extreme_cold_wind_chill', 'frost_freeze') ~ "extreme_cold",
+#     hazard %in% c('excessive_heat', 'heat') ~ "extreme_heat",
+#     hazard %in% c('coastal_flood', 'flash_flood', 'flood', 'heavy_rain', 'lakeshore_flood') ~ "floods",
+#     hazard %in% c('hail') ~ "hails",
+#     hazard %in% c('high_wind', 'strong_wind') ~ "high_winds",
+#     hazard %in% c('hurricane', 'hurricane_typhoon', 'tropical_depression', 'tropical_storm') ~ "hurricanes",
+#     hazard %in% c('funnel_cloud', 'tornado') ~ "tornadoes",
+#     hazard %in% c('dense_smoke', 'wildfire') ~ "wild_fires",
+#     hazard %in% c('blizzard', 'avalanche', 'heavy_snow', 'ice_storm', 'lake_effect_snow', 'sleet', 'winter_storm', 'winter_weather') ~ "winter_storms"
+#   )) %>%
+#   dplyr::select(-minutes) %>%
+#   drop_na() #remove binary indicators 
 
-df_data_prep = sf_data %>%
-  st_set_geometry(NULL) %>%
-  dplyr::select(c(GEOID, AMBULANCES:WATEFF)) %>%
-  left_join(county_proj_scores, by = c("GEOID"))
-  
-five_recipe = recipe(GEOID ~ . , data = df_data_prep) %>% step_impute_knn(all_predictors()) #knn impute missing predictors (if any)
-df_data_five = prep(five_recipe) %>% 
-  juice() %>% 
-  dplyr::select(c(Factor1:Factor5))
+#save(df_hazards_clean, file = "Data/processed/df_hazards_clean.Rda")
+load(file = "Data/processed/df_hazards_clean.Rda")
+hazard_count = df_hazards_clean %>%
+  group_by(hazard2) %>%
+  summarise(Hours = sum(hours)) 
 
-df_data = sf_data %>%
-  dplyr::select(c(ln_hrs:RZ_mode)) %>%
-  st_set_geometry(NULL) %>%
-  bind_cols(df_data_five)
+# Data-frame of hazard of interest
+df_hazard = df_hazards_clean %>%
+  dplyr::select(-hazard) %>%
+  group_by(GEOID, hazard2) %>%
+  summarise(Hours = sum(hours)) %>%
+  dplyr::filter(hazard2 == my_event)
+rm(list=c("df_hazards_clean")) 
+gc() 
+
+# Combine data for final data-frame 
+df_data = df_data1 %>%
+  inner_join(df_hazard, by = c("GEOID")) %>%
+  dplyr::filter(Hours > 0) %>%
+  mutate(lnHrs = log(Hours / 5 + 0.001)) %>% #take log of annualized hours
+  dplyr::select(-c(hazard2, Hours)) %>%
+  relocate(lnHrs)
+
+df_preds = df_data %>% 
+  dplyr::select(-c(lnHrs, GEOID))
 
 # Split into training vs testing
-set.seed(23)
-df_split = initial_split(df_data, prop = 0.80, strata = "ln_hrs")
+set.seed(32)
+df_split = initial_split(df_data, prop = 0.80, strata = lnHrs)
 df_train = training(df_split)
 df_test = testing(df_split)  
 df_cv = vfold_cv(df_train, v = 10, repeats = 1)
-df_preds = df_data %>% dplyr::select(-c(ln_hrs, ln_cust, pct_cust, GEOID))
 
-# Recipes for tidymodels 
-recipe_hrs = recipe(ln_hrs ~ . , data = df_data) %>% step_rm(ln_cust, pct_cust, GEOID) %>% step_naomit(ln_hrs)
-recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, GEOID) %>% step_naomit(pct_cust)
+# Recipe for ML
+recipe_mine = recipe(lnHrs ~ . , data = df_data) %>% 
+  step_rm(GEOID) %>% 
+  step_naomit()
 
 ################################################################################
 #### MACHINE LEARNING ##########################################################
 ################################################################################
-### Define which recipe and responses you want to use 
-recipe_mine = recipe_pct
-
-## Recipe - ln_hrs
-# y_train = df_train %>% pull(ln_hrs) %>% na.omit() 
-# y_test = df_test %>% pull(ln_hrs) %>% na.omit() 
-# X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
-# X_test = df_test %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust)) %>% na.omit()
-
-## Recipe - pct_cust
-y_train = df_train %>% na.omit() %>% pull(pct_cust)
-y_test = df_test %>% na.omit() %>% pull(pct_cust)
-X_train = df_train %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-X_test = df_test %>% na.omit() %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
+y_train = df_train %>% pull(lnHrs) %>% na.omit() 
+y_test = df_test %>% pull(lnHrs) %>% na.omit() 
+X_train = df_train %>% dplyr::select(-c(GEOID, lnHrs)) %>% na.omit()
+X_test = df_test %>% dplyr::select(-c(GEOID, lnHrs)) %>% na.omit()
 
 ### Lasso, Ridge Regression, and Elastic Net ###################################
 #https://www.tidyverse.org/blog/2020/11/tune-parallel/
@@ -146,6 +182,7 @@ lre_predictions = lre_fit %>% collect_predictions() #predictions for test sample
 rsq_lre = paste(lre_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_lre = paste(show_best(lre_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
 
+
 #regular MLR
 df_mlr =  X_train %>%
   mutate(y = y_train)
@@ -154,10 +191,9 @@ summary(mlr)
 mlr_predictions = predict(mlr, newdata = X_test)
 rsq_mlr = format(round(cor(mlr_predictions, y_test)^2, 3), nsmall = 3)
 asd = vip(mlr, n = 20)
-#imp.new = asd$data$Importance/sum(asd$data$Importance)
-#asd$data$Importance = imp.new
+imp.new = asd$data$Importance/sum(asd$data$Importance)
+asd$data$Importance = imp.new
 plot(asd)
-asdf = data.frame(mlr$coefficients) 
 
 ### XGBoost ####################################################################
 show_model_info("boost_tree")
@@ -189,27 +225,14 @@ xgb_predictions = xgb_fit %>% collect_predictions() #predictions for test sample
 
 rsq_xgb = paste(xgb_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_xgb = paste(show_best(xgb_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
-  
+
 ### BART #######################################################################
-bart_fit = bartMachineCV(data.frame(X_train), y_train, k_folds = 10, serialize = T) #bartMachine CV win: k: 5 nu, q: 10, 0.75 m: 50
+bart_fit = bartMachineCV(data.frame(X_train), y_train, k_folds = 10, serialize = T) 
 bart_predictions = predict(bart_fit, data.frame(X_test))
-#save(bart_fit, file = "bart_fit.Rda")
 
 rsq_bart = format(round(1 - sum((y_test - bart_predictions)^2) / sum((y_test - mean(y_test))^2), 3), nsmall = 3)
 bart_cv = k_fold_cv(data.frame(X_train), y_train, k_folds = 10)
 cverror_bart = format(round(bart_cv$rmse, 3), nsmall = 3)
-
-### SPATIAL REGRESSION #########################################################
-#https://rpubs.com/quarcs-lab/tutorial-spatial-regression
-# sf_train_sreg = county_map_proj %>%
-#   inner_join(df_data, by = "GEOID") %>%
-#   dplyr::select(-c(GEOID, NAME, POPULATION, ln_cust, pct_cust))
-# neighbors = poly2nb(sf_train_sreg, queen = T) #find county neighbors 
-# weights = nb2listw(include.self(neighbors)) #include self for weights
-# sdm.eq = as.formula(paste("ln_hrs", 
-#                           paste(colnames(sf_train_sreg)[2:length(colnames(sf_train_sreg))-1], collapse = " + "), 
-#                           sep = " ~ "))
-# asd = spatialreg::lagsarlm(formula = sdm.eq, data = sf_train_sreg, listw = weights, type = "mixed")
 
 ##########################################################################################################
 ##### PLOTTING ###########################################################################################
@@ -217,10 +240,10 @@ cverror_bart = format(round(bart_cv$rmse, 3), nsmall = 3)
 gg = dplyr::tibble(actual = y_test, 
                    #eNet = as.vector(lre_predictions$.pred),
                    bart = as.vector(bart_predictions),
-                   MLR = as.vector(mlr_predictions),
+                   mlr = as.vector(mlr_predictions),
                    #rf = as.vector(rf_predictions$.pred),
                    xgb = as.vector(xgb_predictions$.pred)
-                   )
+)
 gg = arrange(gg, actual)
 gg$index = seq.int(nrow(gg))
 gg_actual = gg %>% dplyr::select(index, actual)
@@ -261,9 +284,9 @@ plot_filtering_estimates2 <- function(df) {
       ),
       name = element_blank()) + 
     scale_y_continuous(labels = function(x) paste0(x)) +
-    xlab("Index (County x Event)") +
-    ylab("Hours (ln)") + 
-    ggtitle("Hurricane Outage Duration: Test Sample\n -- Five Factors --") + 
+    xlab("County") +
+    ylab("Annual Hours (ln)") + 
+    ggtitle(paste("Exposure to ", str_to_title(gsub("_", " ", my_event)), ": Test Sample", sep = "")) +
     # guides(
     #   color = guide_legend(order = 2),
     #   shape = guide_legend(order = 1),
@@ -272,10 +295,9 @@ plot_filtering_estimates2 <- function(df) {
     theme(legend.spacing.y = unit(-0.25, "cm"),
           legend.direction = "vertical",
           legend.box = "vertical",
-          legend.position = c(.225, .8),
+          legend.position = c(.225, .85),
           plot.title = element_text(hjust = 0.5)
     )
-  
   print(p)
 }
 plot_filtering_estimates2(gg)
@@ -308,7 +330,6 @@ vip(final_obj, n = 20)
 
 bart_vimp = investigate_var_importance(bart_fit)
 
-
 df_imp = importance %>% 
   mutate(cat = case_when(
     Feature %in% c("delta_WIND10M", "delta_vapor", "delta_T10M", "delta_pressure", 
@@ -326,24 +347,6 @@ df_imp = importance %>%
   mutate(Feature_clean = str_to_title(Feature2)) %>%
   dplyr::select(-c(Feature1, Feature2))
 
-df_imp_mlr = asd$data %>%
-  mutate(Feature = Variable) %>%
-  mutate(cat = case_when(
-    Feature %in% c("delta_WIND10M", "delta_vapor", "delta_T10M", "delta_pressure", 
-                   "max_humidity_10M", "max_T10M", "max_WIND10M",
-                   "spi03", "spi06", "spi12", "spi24") ~ "Weather",
-    Feature %in% c("Barren", "Cultivated", "Forest", "Herbaceous", "Shrub", "Water", "Wetlands",
-                   "DEM_sd", "DEM_min", "RZ_med", "RZ_mode") ~ "Environment",
-    TRUE ~ "Socio-Economic"
-  )) %>%
-  mutate(Feature = case_when(Feature == "max_humidity_10M" ~ "max_humidity10M", TRUE ~ as.character(Feature))) %>% #name correction
-  dplyr::arrange(desc(Importance)) %>%
-  dplyr::slice(1:20) %>%
-  mutate(Feature1 = str_replace(Feature, "_", " ")) %>%
-  mutate(Feature2 = tolower(Feature1)) %>%
-  mutate(Feature_clean = str_to_title(Feature2)) %>%
-  dplyr::select(-c(Feature1, Feature2))
-
 fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
 pp2 = ggplot() + 
   theme_classic() + 
@@ -353,7 +356,7 @@ pp2 = ggplot() +
   scale_color_manual(values = fill_vec) +
   xlab("Importance") +
   ylab(element_blank()) + 
-  ggtitle("Variable Importance (XGB): Hurricane Outage Duration \n-- Five Factors --") + 
+  ggtitle(paste("Variable Importance (XGB): Exposure to ", str_to_title(gsub("_", " ", my_event)), sep = "")) +
   labs(fill = "Variable Type", color = "Variable Type") +
   guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
   theme(
@@ -363,140 +366,125 @@ pp2 = ggplot() +
   )
 pp2
 
+##########################################################################################################
+##### EXPOSURE MAPS  #####################################################################################
+##########################################################################################################
+# Base map
+load(file = "Data/processed/county_map_proj.Rda")
+
+# Annual outage hours - all US log(Hours / 5 + 0.001)
+hrs = df_data %>%
+  dplyr::select(GEOID, lnHrs) %>%
+  mutate(Hours = exp(lnHrs) - 0.001) %>%
+  group_by(GEOID) 
+
+county_hrs = county_map_proj %>%
+  left_join(hrs, by = c("GEOID"))
+
+county_plot = county_hrs
+gg3 = ggplot()+
+  geom_sf(data = county_plot, aes(fill = Hours), color = NA) +
+  scale_fill_viridis_c(option="plasma", na.value = "grey30") +
+  geom_sf(data = county_plot, fill = NA, color = "black", lwd = 0.01) + 
+  theme_dark() +
+  #labs(title = paste("Annual ", str_remove(str_to_title(gsub("_", " ", my_event)),"s"), " Exposure (2015 - 2019)", sep = ""), fill = "Hours") +
+  #labs(title = expression(atop("Annual Power Outages", paste("Tropical Storms (2015 - 2019)"))), fill = "Hours") +
+  labs(title = expression(atop("Annual Exposure to Sust."~Winds>=34~"kt", paste("Tropical Cyclones (2015 - 2019)"))), fill = "Hours") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+  )
+print(gg3)
 
 ##########################################################################################################
 ##### PARTIAL DEPENDENCE PLOTS (PDPs) - FINAL MODEL ######################################################
 ##########################################################################################################
-X_train = df_train %>% dplyr::select(-c(GEOID, ln_hrs, ln_cust, pct_cust))
-# pdp1 = pdp::partial(final_obj, pred.var = "Wetlands", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp2 = pdp::partial(final_obj, pred.var = "DEM_sd", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp3= pdp::partial(final_obj, pred.var = "DEM_min", ice = F, center = F,
-#                    plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                    train = X_train, type = "regression")
-# pdp4 = pdp::partial(final_obj, pred.var = "QMOHO", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp5 = pdp::partial(final_obj, pred.var = "GENDINC", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp6 = pdp::partial(final_obj, pred.var = "QBLACK", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp7 = pdp::partial(final_obj, pred.var = "PATTACHRES", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# pdp8 = pdp::partial(final_obj, pred.var = "QHLTH65", ice = F, center = F,
-#                     plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
-#                     train = X_train, type = "regression")
-# 
-# grid.arrange(pdp1, pdp2, pdp3, pdp4, ncol = 2)
-# grid.arrange(pdp5, pdp6, pdp7, pdp8, ncol = 2)
+pdp = pdp::partial(final_obj, pred.var = "QHLTH", ice = F, center = F,
+                   plot = T, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                   train = X_train, type = "regression")
+pdp
+
+pdp1 = pdp::partial(final_obj, pred.var = "Forest", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp1 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp1, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = Forest), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Forest")
+ggpdp1
+
+pdp2 = pdp::partial(final_obj, pred.var = "DEM_min", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp2 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp2, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = DEM_min), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Dem Min")
+ggpdp2
+
+pdp3 = pdp::partial(final_obj, pred.var = "PROXMET", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1) 
+ggpdp3 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp3, aes(x = IV / 1000, y = yhat)) +
+  geom_rug(data = X_train, aes(x = PROXMET / 1000), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Proxmet")
+ggpdp3
+
+pdp4 = pdp::partial(final_obj, pred.var = "QSPANISH", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp4 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp4, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = QSPANISH), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Qspanish")
+ggpdp4
+
+pdp5 = pdp::partial(final_obj, pred.var = "QHLTH65", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp5 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp5, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = QHLTH65), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Qhlth65")
+ggpdp5
+
+pdp6 = pdp::partial(final_obj, pred.var = "CROPINS", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp6 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp6, aes(x = IV * 100, y = yhat)) +
+  geom_rug(data = X_train, aes(x = CROPINS * 100), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Cropins") 
+ggpdp6
+
+pdp7 = pdp::partial(final_obj, pred.var = "GENDINC", ice = F, center = F,
+                    plot = F, rug= T, alpha = 0.1, #plot.engine = "ggplot2",
+                    train = X_train, type = "regression") %>%
+  rename(IV = 1)
+ggpdp7 = ggplot() +
+  theme_gray() +
+  geom_line(data = pdp7, aes(x = IV, y = yhat)) +
+  geom_rug(data = X_train, aes(x = GENDINC), sides = "b", alpha = 0.33, color = "black") +
+  xlab("Gendinc")
+ggpdp7
+
+ggpdps=grid.arrange(ggpdp3, ggpdp4, ggpdp5, ggpdp6, ncol = 2,
+             top = textGrob("Partial Dependence Plots: Socio-Economic"))
 
 
-##########################################################################################################
-##### CREATE MAPS  #######################################################################################
-##########################################################################################################
-# Base county map 
-load(file = "Data/processed/county_map_proj.Rda")
-
-# Hurricane exposure
-hurricane_exposure = county_wind(counties = as.vector(county_map_proj$GEOID), 
-                                 start_year = 2015, end_year = 2019, wind_limit = 17.4)
-hurricane_group = hurricane_exposure %>%
-  group_by(fips) %>%
-  summarize(avg_sust_spd = mean(vmax_sust), avg_gust_spd = mean(vmax_gust), sum_sust_hrs = sum(sust_dur) / 60, sum_gust_hrs = sum(gust_dur) / 60)
-
-# Annual outage hours - all US
-hrs = df_data %>%
-  dplyr::select(GEOID, ln_hrs) %>%
-  mutate(hrs = exp(ln_hrs)) %>%
-  group_by(GEOID) %>%
-  summarise(Hours = sum(hrs))
-hr_map = county_map_proj %>%
-  left_join(hrs, by = c("GEOID")) %>%
-  left_join(hurricane_group, by = c("GEOID" = "fips"))
-
-gg3 = ggplot()+
-  geom_sf(data = hr_map, aes(fill = Hours), color = NA) +
-  #geom_sf(data = hr_map, aes(fill = sum_sust_hrs), color = NA) +
-  scale_fill_viridis_c(option="plasma", na.value = "grey30") +
-  geom_sf(data = county_map_proj, fill = NA, color = "black", lwd = 0.1) + 
-  theme_dark() +
-  labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
-  #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank()
-  )
-print(gg3)
-
-# Annual outage hours - zoom 
-county_zoom_list = c("TX", "LA", "MS", "AL", "FL", "GA", "SC", "NC", "VA")
-county_zoom = get_acs(geography = "county", state = county_zoom_list,
-                      variables=c("B01003_001"), year = 2019, geometry = TRUE, 
-                      cache_table = TRUE) %>%
-  mutate(POPULATION = estimate) %>%
-  dplyr::select(GEOID, NAME) %>%
-  st_transform(5070) 
-hr_zoom = county_zoom %>%
-  left_join(hrs, by = c("GEOID")) %>%
-  left_join(hurricane_group, by = c("GEOID" = "fips"))
-
-gg3 = ggplot()+
-  geom_sf(data = hr_zoom, aes(fill = Hours), color = NA) +
-  #geom_sf(data = hr_zoom, aes(fill = sum_sust_hrs), color = NA) +
-  scale_fill_viridis_c(option="plasma", na.value = "grey30") +
-  geom_sf(data = county_zoom, fill = NA, color = "black", lwd = 0.1) + 
-  theme_dark() +
-  labs(title = "Power Outages\nHurricanes (2015 - 2019)", fill = "Hours") +
-  #labs(title = "Duration Sustained Winds > 20 m/s\nHurricanes (2015-2019)", fill = "Hours") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank()
-  )
-print(gg3)
-
-
-##########################################################################################################
-##### CHECK MODEL ASSUMPTIONS  ###########################################################################
-##########################################################################################################
-# Residuals
-res_xgb = as.vector(xgb_predictions$.pred) - y_test
-res_lre = as.vector(lre_predictions$.pred) - y_test
-res = res_xgb
-
-# Normality of residuals 
-# http://www.sthda.com/english/wiki/normality-test-in-r
-qqnorm(res)
-qqline(res)
-shapiro.test(res)
-
-# Heteroskedacity of residuals
-fitted = as.vector(xgb_predictions$.pred) 
-plot(fitted, res_xgb)
-
-bart_assmp = check_bart_error_assumptions(bart_fit)
-
-# Spatial dependency of residuals
-rr = data.frame(as.factor(df_test$GEOID))
-rr$res = res
-colnames(rr) = c("GEOID", "resid")
-plot(rr) # looks good but use varigoram below to confirm 
-
-county_centroid = st_centroid(county_map_proj) # get center of counties 
-county_lonlat = county_centroid %>% 
-  mutate(X = unlist(map(county_centroid$geometry,1)),
-         Y = unlist(map(county_centroid$geometry,2))) %>%
-  dplyr::select(-NAME, -POPULATION) %>%
-  inner_join(rr, by = c("GEOID")) %>%
-  rename(Z = resid)
-county_lonlat_sp = as_Spatial(county_lonlat)
-vgram = variogram(Z~1, county_lonlat_sp)
-plot(vgram)
 
 ########################################################################################################
 ### FIGURES FOR PUBLICATION
@@ -505,7 +493,7 @@ pdf_x = 8.5 #sra 8.5 x 3.65 in
 pdf_y = 3.65
 
 #Figure model accuracy
-gg_acc = ggplot() + 
+gg_acc  = ggplot() + 
   theme_classic() + 
   geom_hline(yintercept = mean(gg$actual, na.rm = T), linetype="dashed", color = "gray50", alpha = 0.85) +
   geom_line(data = gg_all, aes(x = index, y = ypred, color = Model, lty = Model, alpha = Model)) +
@@ -513,7 +501,7 @@ gg_acc = ggplot() +
     values = color_vec, 
     labels = c("Actual",
                bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")"),
-               bquote("MLR (" * R^2 ~ "=" ~ .(rsq_mlr) * ")"), 
+               bquote("MLR (" * R^2 ~ "=" ~ .(rsq_mlr)  * ")"), 
                bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
     ),
     name = element_blank()) +
@@ -534,11 +522,9 @@ gg_acc = ggplot() +
     ),
     name = element_blank()) + 
   scale_y_continuous(labels = function(x) paste0(x)) +
-  xlab("Index (County x Tropical Cyclone)") +
+  xlab("County") +
   ylab("Hours (ln)") + 
-  ggtitle("Outage Duration: Test Sample\n -- Five Factors --") + 
-  #ylab("Max %Customers Out (ln)") + 
-  #ggtitle("Customers w/o Power: Test Sample") + 
+  ggtitle(paste("Exposure: Test Sample", sep = "")) +
   # guides(
   #   color = guide_legend(order = 2),
   #   shape = guide_legend(order = 1),
@@ -547,21 +533,28 @@ gg_acc = ggplot() +
   theme(legend.spacing.y = unit(-0.25, "cm"),
         legend.direction = "vertical",
         legend.box = "vertical",
-        legend.position = c(.225, .8),
+        legend.position = c(.8, .2),
         plot.title = element_text(hjust = 0.5)
   )
 gg_acc
+cow_haz = cowplot::plot_grid(gg3, gg_acc, ncol = 2, scale = 0.95, rel_widths = c(1.33,1))
+pdf("Figures/Paper/hazard.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_haz
+dev.off()
 
-
-vv2mlr = ggplot() + 
+# Figure Variable importance and PDPs
+df_vv = df_imp %>%
+  dplyr::slice(1:20) 
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+vv2 = ggplot() + 
   theme_classic() + 
-  geom_col(data = df_imp_mlr, aes(x = Importance, y = fct_reorder(Feature_clean, Importance), fill = cat, color = cat), 
+  geom_col(data = df_vv, aes(x = Gain, y = fct_reorder(Feature_clean, Gain), fill = cat, color = cat), 
            alpha = .75) +
   scale_fill_manual(values = fill_vec) +
   scale_color_manual(values = fill_vec) +
-  xlab("Absolute t-value") +
+  xlab("Variable Importance") +
   ylab(element_blank()) + 
-  ggtitle("MLR: Outage Duration\n -- Five Factors --") + 
+  ggtitle("Tropical Cyclone Exposure") + 
   labs(fill = "Variable Type", color = "Variable Type") +
   guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
   theme(
@@ -569,13 +562,11 @@ vv2mlr = ggplot() +
     legend.spacing.y = unit(0.33, "cm"),
     legend.position = c(.8, .4)
   )
-vv2mlr
+vv2
 
-
-cow_acc = cowplot::plot_grid(gg_acc, vv2mlr, ncol = 2, scale = 0.95)
-cow_acc
-pdf("Figures/Paper/five.pdf", width = pdf_x, height = pdf_y) #SRA ppt
-cow_acc
+cow_pdps = cowplot::plot_grid(vv2, ggpdps, ncol = 2, scale = 0.95)
+cow_pdps
+pdf("Figures/Publish/pdps.pdf", width = pdf_x, height = pdf_y) #SRA ppt
+cow_pdps
 dev.off()
-
 

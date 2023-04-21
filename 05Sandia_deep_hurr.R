@@ -52,7 +52,7 @@ our_events = c(
 load(file = "Data/processed/sf_data_ALL_nototal.Rda")
 
 sf_data = sf_data_ALL %>%
-  dplyr::filter(droughts >= 1) %>% #filter to event of interest
+  dplyr::filter(hurricanes >= 1) %>% #filter to event of interest
   mutate(ln_hrs = log(duration_hr)) %>% 
   mutate(ln_cust = log(max_cust_out)) %>% 
   #mutate(pct_cust = max_frac_cust_out) %>%
@@ -83,7 +83,7 @@ recipe_pct = recipe(pct_cust ~ . , data = df_data) %>% step_rm(ln_hrs, ln_cust, 
 #### MACHINE LEARNING ##########################################################
 ################################################################################
 ### Define which recipe and responses you want to use 
-recipe_mine = recipe_pct
+recipe_mine = recipe_hrs
 
 ## Recipe - ln_hrs
 # y_train = df_train %>% pull(ln_hrs) %>% na.omit()
@@ -105,7 +105,7 @@ lre_model = linear_reg(penalty = tune(), mixture = tune()) %>% #lambda (penalty)
   set_engine("glmnet") %>%
   translate()
 lre_work = workflow() %>% 
-  add_recipe(recipe_mine) %>%
+  add_recipe(recipe_hrs_lre) %>%
   add_model(lre_model)
 #lre_grid = dials::grid_regular(parameters(penalty(), mixture()), levels = c(5, 5))
 set.seed(32); lre_grid = dials::grid_max_entropy(parameters(penalty(), mixture()), size = 40)
@@ -130,6 +130,18 @@ lre_predictions = lre_fit %>% collect_predictions() #predictions for test sample
 
 rsq_lre = paste(lre_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_lre = paste(show_best(lre_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
+
+#regular MLR
+df_mlr =  X_train %>%
+  mutate(y = y_train)
+mlr = lm(y ~ ., data = df_mlr)
+summary(mlr)
+mlr_predictions = predict(mlr, newdata = X_test)
+rsq_mlr = format(round(cor(mlr_predictions, y_test)^2, 3), nsmall = 3)
+asd = vip(mlr, n = 20)
+imp.new = asd$data$Importance/sum(asd$data$Importance)
+asd$data$Importance = imp.new
+plot(asd)
 
 ### XGBoost ####################################################################
 show_model_info("boost_tree")
@@ -280,6 +292,14 @@ final_lre = lre_work %>%
   finalize_workflow(lre_best) %>%
   fit(df_data)
 print(tidy(final_lre), n = 150)
+final_lre_model = extract_fit_parsnip(final_lre)$fit
+lre_coef = predict(final_lre_model, type = "coefficients", s = lre_best$penalty)
+df_lre_coef = data.frame(var = lre_coef@Dimnames[[1]]) %>%
+  mutate(s1 = 0)
+df_lre_coef[lre_coef@i + 1, 2] = lre_coef@x 
+df_lre_coef2 = df_lre_coef %>%
+  mutate(rel.s1 = abs(s1) / sum(abs(df_lre_coef$s1)))
+vip(final_lre_model, n = 20)
 
 final_model = xgb_work %>%
   finalize_workflow(xgb_best) %>%

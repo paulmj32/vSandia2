@@ -182,6 +182,19 @@ lre_predictions = lre_fit %>% collect_predictions() #predictions for test sample
 rsq_lre = paste(lre_test %>% dplyr::filter(.metric == "rsq") %>% pull(.estimate) %>% round(3) %>% format(nsmall = 3))
 cverror_lre = paste(show_best(lre_tune, metric = "rmse") %>% dplyr::slice(1) %>% pull(mean) %>% round(3) %>% format(nsmall = 3))
 
+
+#regular MLR
+df_mlr =  X_train %>%
+  mutate(y = y_train)
+mlr = lm(y ~ ., data = df_mlr)
+summary(mlr)
+mlr_predictions = predict(mlr, newdata = X_test)
+rsq_mlr = format(round(cor(mlr_predictions, y_test)^2, 3), nsmall = 3)
+asd = vip(mlr, n = 20)
+imp.new = asd$data$Importance/sum(asd$data$Importance)
+asd$data$Importance = imp.new
+plot(asd)
+
 ### XGBoost ####################################################################
 show_model_info("boost_tree")
 xgb_model = boost_tree(mode = "regression", trees = tune(), min_n = tune(), tree_depth = tune(), learn_rate = tune(), loss_reduction = tune(), mtry = tune()) %>%
@@ -540,7 +553,7 @@ vv2 = ggplot() +
   scale_color_manual(values = fill_vec) +
   xlab("Variable Importance") +
   ylab(element_blank()) + 
-  ggtitle("Hurricane Exposure") + 
+  ggtitle("Tropical Cyclone Exposure") + 
   labs(fill = "Variable Type", color = "Variable Type") +
   guides(fill = guide_legend(byrow = T), color = guide_legend(byrow = T)) +
   theme(
