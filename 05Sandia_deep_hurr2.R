@@ -382,9 +382,13 @@ pp2 = ggplot() +
   )
 pp2
 
-
-df_imp_bart = data.frame(as.list(bart_vimp[[1]])) %>% 
-  gather(key = "Feature", value = "Inclusion") %>%
+fill_vec = c("#CEB966", "#A379BB", "#6BB1C9")  
+df_imp_bart.1 = data.frame(as.list(bart_vimp[[1]])) %>% 
+  gather(key = "Feature", value = "Inclusion")
+df_imp_bart.2 = data.frame(as.list(bart_vimp[[2]])) %>% 
+  gather(key = "Feature", value = "StandDev")
+df_imp_bart = df_imp_bart.1 %>%
+  inner_join(df_imp_bart.2, by = c("Feature")) %>%
   arrange(desc(Inclusion)) %>%
   mutate(cat = case_when(
     Feature %in% c("delta_WIND10M", "delta_vapor", "delta_T10M", "delta_pressure", 
@@ -406,6 +410,7 @@ bb2 = ggplot() +
            alpha = .75) +
   scale_fill_manual(values = fill_vec) +
   scale_color_manual(values = fill_vec) +
+  geom_errorbarh(data = df_imp_bart, aes(y = fct_reorder(Feature_clean, Inclusion), xmin = Inclusion - StandDev, xmax = Inclusion + StandDev, height = 0.2), col = "gray30", alpha = 0.8) +
   xlab("Inclusion") +
   ylab(element_blank()) + 
   ggtitle("BART Variable Importance: Hurricane Outage Duration") + 
@@ -731,6 +736,88 @@ pdf("Figures/Publish/five.pdf", width = pdf_x, height = pdf_y) #SRA ppt 8.5 x 3.
 cow_ff
 dev.off()
 
+## BART RIBBON
+#Figure model accuracy
+color_bart = c("black", "#35B779FF", "#440154FF")
+color_bart = c("black", "#F8766D", "#00BFC4")
+lty_bart = c(1, 1, 1)
+alpha_bart = c(1, 0.9, 0.75)
 
+bart_ci = round(calc_credible_intervals(bart_fit, X_test, ci_conf = 0.95), 2)
+bart_ribbon = data.frame(
+                lower = bart_ci[,1],
+                upper = bart_ci[,2]
+) 
+
+if (length(na_test) > 0) {
+  bb = dplyr::tibble(actual = y_test, 
+                     #eNet = as.vector(lre_predictions$.pred)[-c(na_test)],
+                     bart = as.vector(bart_predictions),
+                     mlr = as.vector(mlr_predictions),
+                     #rf = as.vector(rf_predictions$.pred),
+                     xgb = as.vector(xgb_predictions$.pred)[-c(na_test)]
+  )
+} else {
+  bb = dplyr::tibble(actual = y_test, 
+                     #eNet = as.vector(lre_predictions$.pred),
+                     bart = as.vector(bart_predictions),
+                     mlr = as.vector(mlr_predictions),
+                     #rf = as.vector(rf_predictions$.pred),
+                     xgb = as.vector(xgb_predictions$.pred)
+  )
+}
+bb = bind_cols(bb, bart_ribbon)
+bb = arrange(bb, actual)
+bb$index = seq.int(nrow(bb))
+
+bb_all = gg_all %>%
+  dplyr::filter(Model != 'mlr' & Model != 'eNet' & Model != 'xgb')
+bb_acc = ggplot() + 
+  theme_classic() + 
+  geom_hline(yintercept = mean(gg$actual, na.rm = T), linetype="dashed", color = "gray50", alpha = 0.85) +
+  geom_ribbon(data = bb, aes(x = index, ymin = lower, ymax = upper), fill = color_bart[2], alpha = 0.32) +
+  geom_line(data = bb_all, aes(x = index, y = ypred, color = Model, lty = Model, alpha = Model)) +
+  scale_color_manual(
+    values = color_bart, 
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")")
+               
+               #,bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) +
+  scale_linetype_manual(
+    values = lty_bart,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")")
+          
+               #,bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")         
+    ),
+    name = element_blank()) + 
+  scale_alpha_manual(
+    values = alpha_bart,
+    labels = c("Actual",
+               bquote("BART (" * R^2 ~ "=" ~ .(rsq_bart) * ")")
+
+               #,bquote("XGB (" * R^2 ~ "=" ~ .(rsq_xgb) * ")")
+    ),
+    name = element_blank()) + 
+  scale_y_continuous(labels = function(x) paste0(x)) +
+  xlab("Index (County x Tropical Cyclone)") +
+  ylab("Hours (ln)") + 
+  ggtitle("Outage Duration: Test Sample") + 
+  #ylab("Max %Customers Out (ln)") + 
+  #ggtitle("Customers w/o Power: Test Sample") + 
+  # guides(
+  #   color = guide_legend(order = 2),
+  #   shape = guide_legend(order = 1),
+  #   linetype = guide_legend(order = 2)
+  # ) + 
+  theme(legend.spacing.y = unit(-0.25, "cm"),
+        legend.direction = "vertical",
+        legend.box = "vertical",
+        legend.position = c(.225, .8),
+        plot.title = element_text(hjust = 0.5)
+  )
+bb_acc
 
 
